@@ -1,0 +1,52 @@
+extern crate serde_pickle;
+extern crate serde_json;
+
+use std::env;
+use std::fs::File;
+use std::io::{stdin, stdout, Read};
+use std::process::exit;
+
+use serde_json as json;
+use serde_pickle as pickle;
+
+fn main() {
+    let args = env::args().collect::<Vec<_>>();
+    if args.len() < 2 {
+        println!("Usage: pickle (decode | transcode | to_json | from_json) [filename]");
+        println!("");
+        println!("Input is either given file or stdin.");
+        println!("decode:    decode and display pickle");
+        println!("transcode: decode and re-encode pickle");
+        println!("to_json:   decode and jsonify pickle");
+        println!("from_json: encode pickle from json");
+        exit(1);
+    }
+    let reader: Box<Read>;
+    if args.len() == 3 {
+        reader = Box::new(File::open(&args[2]).unwrap());
+    } else {
+        reader = Box::new(stdin());
+    }
+    match &*args[1] {
+        "decode" => {
+            let decoded: pickle::Value = pickle::value_from_reader(reader).unwrap();
+            println!("{:#?}", decoded);
+        },
+        "transcode" => {
+            let decoded: pickle::Value = pickle::value_from_reader(reader).unwrap();
+            pickle::value_to_writer(&mut stdout(), &decoded, true).unwrap();
+        },
+        "to_json" => {
+            let decoded: json::Value = pickle::from_reader(reader).unwrap();
+            println!("{:#?}", decoded);
+        },
+        "from_json" => {
+            let decoded: json::Value = json::from_reader(reader).unwrap();
+            pickle::to_writer(&mut stdout(), &decoded, false).unwrap();
+        }
+        _ => {
+            println!("No such subcommand.");
+            exit(1);
+        }
+    }
+}
