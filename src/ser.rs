@@ -469,6 +469,7 @@ fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, use_proto_3: bool) -> Re
     writer.write_all(&[STOP]).map_err(From::from)
 }
 
+
 /// Encode the value into a pickle stream.
 pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, use_proto_3: bool)
                                      -> Result<()> {

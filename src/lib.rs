@@ -78,6 +78,7 @@ pub mod de;
 pub mod error;
 pub mod value;
 mod consts;
+mod value_impls;
 
 #[cfg(test)]
 #[path = "../test/mod.rs"]

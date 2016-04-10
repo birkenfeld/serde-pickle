@@ -9,14 +9,21 @@
 use std::fmt;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::collections::btree_map;
-use std::vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
-use serde::{ser, de};
+
+pub use value_impls::{to_value, from_value};
 
 use error::{Error, ErrorCode};
 
+/// Represents all primitive builtin Python values that can be restored by
+/// unpickling.
+///
+/// Note on integers: the distinction between the two types (short and long) is
+/// very fuzzy in Python, and they can be used interchangeably.  In Python 3,
+/// all integers are long integers, so all are pickled as such.  While decoding,
+/// we simply put all integers that fit into an i64, and use BigInt for the
+/// rest.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// None
@@ -25,7 +32,7 @@ pub enum Value {
     Bool(bool),
     /// Short integer
     I64(i64),
-    /// Big integer
+    /// Long integer (unbounded length)
     Int(BigInt),
     /// Float
     F64(f64),
@@ -41,19 +48,26 @@ pub enum Value {
     Set(BTreeSet<HashableValue>),
     /// Frozen (immutable) set
     FrozenSet(BTreeSet<HashableValue>),
-    /// Dictionary
+    /// Dictionary (map)
     Dict(BTreeMap<HashableValue, Value>),
 }
 
+/// Represents all primitive builtin Python values that can be contained
+/// in a "hashable" context (i.e., as dictionary keys and set elements).
+///
+/// In Rust, the type is *not* hashable, since we use B-tree maps and sets
+/// instead of the hash variants.  To be able to put all Value instances
+/// into these B-trees, we implement a consistent ordering between all
+/// the possible types (see below).
 #[derive(Clone, Debug)]
 pub enum HashableValue {
     /// None
     None,
     /// Boolean
     Bool(bool),
-    /// Normal-sized integer
+    /// Short integer
     I64(i64),
-    /// Big integer
+    /// Long integer
     Int(BigInt),
     /// Float
     F64(f64),
@@ -67,7 +81,17 @@ pub enum HashableValue {
     FrozenSet(BTreeSet<HashableValue>),
 }
 
+fn values_to_hashable(values: Vec<Value>) -> Result<Vec<HashableValue>, Error> {
+    values.into_iter().map(Value::to_hashable).collect()
+}
+
+fn hashable_to_values(values: Vec<HashableValue>) -> Vec<Value> {
+    values.into_iter().map(HashableValue::to_value).collect()
+}
+
 impl Value {
+    /// Convert the value into a hashable version, if possible.  If not, return
+    /// a ValueNotHashable error.
     pub fn to_hashable(self) -> Result<HashableValue, Error> {
         match self {
             Value::None         => Ok(HashableValue::None),
@@ -85,6 +109,7 @@ impl Value {
 }
 
 impl HashableValue {
+    /// Convert the value into its non-hashable version.  This always works.
     pub fn to_value(self) -> Value {
         match self {
             HashableValue::None         => Value::None,
@@ -100,63 +125,40 @@ impl HashableValue {
     }
 }
 
+fn write_elements<'a, I, T>(f: &mut fmt::Formatter, it: I,
+                            prefix: &'static str, suffix: &'static str,
+                            len: usize, always_comma: bool) -> fmt::Result
+    where I: Iterator<Item=&'a T>, T: fmt::Display + 'a
+{
+    try!(f.write_str(prefix));
+    for (i, item) in it.enumerate() {
+        if i < len - 1 || always_comma {
+            try!(write!(f, "{}, ", item));
+        } else {
+            try!(write!(f, "{}", item));
+        }
+    }
+    f.write_str(suffix)
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Value::None             => write!(f, "None"),
-            Value::Bool(b)          => write!(f, "{}", if b { "True" } else { "False" }),
-            Value::I64(i)           => write!(f, "{}", i),
-            Value::Int(ref i)       => write!(f, "{}", i),
-            Value::F64(v)           => write!(f, "{}", v),
-            Value::Bytes(ref b)     => write!(f, "b{:?}", b), //
-            Value::String(ref s)    => write!(f, "{:?}", s),
-            Value::List(ref v)     => {
-                try!(write!(f, "["));
-                for (i, item) in v.iter().enumerate() {
-                    if i < v.len() - 1 {
-                        try!(write!(f, "{}, ", item));
-                    } else {
-                        try!(write!(f, "{}", item));
-                    }
-                }
-                write!(f, "]")
-            },
-            Value::Tuple(ref v)     => {
-                try!(write!(f, "("));
-                for (i, item) in v.iter().enumerate() {
-                    if i < v.len() - 1 || v.len() == 1 {
-                        try!(write!(f, "{}, ", item));
-                    } else {
-                        try!(write!(f, "{}", item));
-                    }
-                }
-                write!(f, ")")
-            },
-            Value::Set(ref v) => {
-                if v.len() == 0 {
-                    write!(f, "set()")
-                } else {
-                    try!(write!(f, "{{"));
-                    for (i, item) in v.iter().enumerate() {
-                        if i < v.len() - 1 {
-                            try!(write!(f, "{}, ", item));
-                        } else {
-                            try!(write!(f, "{}", item));
-                        }
-                    }
-                    write!(f, "}}")
-                }
-            },
-            Value::FrozenSet(ref v) => {
-                try!(write!(f, "frozenset(["));
-                for (i, item) in v.iter().enumerate() {
-                    if i < v.len() - 1 {
-                        try!(write!(f, "{}, ", item));
-                    } else {
-                        try!(write!(f, "{}", item));
-                    }
-                }
-                write!(f, "])")
+            Value::None          => write!(f, "None"),
+            Value::Bool(b)       => write!(f, "{}", if b { "True" } else { "False" }),
+            Value::I64(i)        => write!(f, "{}", i),
+            Value::Int(ref i)    => write!(f, "{}", i),
+            Value::F64(v)        => write!(f, "{}", v),
+            Value::Bytes(ref b)  => write!(f, "b{:?}", b), //
+            Value::String(ref s) => write!(f, "{:?}", s),
+            Value::List(ref v)   => write_elements(f, v.iter(), "[", "]", v.len(), false),
+            Value::Tuple(ref v)  => write_elements(f, v.iter(), "(", ")", v.len(), v.len() == 1),
+            Value::FrozenSet(ref v) => write_elements(f, v.iter(),
+                                                      "frozenset([", "])", v.len(), false),
+            Value::Set(ref v)    => if v.len() == 0 {
+                write!(f, "set()")
+            } else {
+                write_elements(f, v.iter(), "{", "}", v.len(), false)
             },
             Value::Dict(ref v) => {
                 try!(write!(f, "{{"));
@@ -183,38 +185,12 @@ impl fmt::Display for HashableValue {
             HashableValue::F64(v)           => write!(f, "{}", v),
             HashableValue::Bytes(ref b)     => write!(f, "b{:?}", b), //
             HashableValue::String(ref s)    => write!(f, "{:?}", s),
-            HashableValue::Tuple(ref v)     => {
-                try!(write!(f, "("));
-                for (i, item) in v.iter().enumerate() {
-                    if i < v.len() - 1 || v.len() == 1 {
-                        try!(write!(f, "{}, ", item));
-                    } else {
-                        try!(write!(f, "{}", item));
-                    }
-                }
-                write!(f, ")")
-            },
-            HashableValue::FrozenSet(ref v) => {
-                try!(write!(f, "frozenset(["));
-                for (i, item) in v.iter().enumerate() {
-                    if i < v.len() - 1 {
-                        try!(write!(f, "{}, ", item));
-                    } else {
-                        try!(write!(f, "{}", item));
-                    }
-                }
-                write!(f, "])")
-            },
+            HashableValue::Tuple(ref v)     => write_elements(f, v.iter(), "(", ")",
+                                                              v.len(), v.len() == 1),
+            HashableValue::FrozenSet(ref v) => write_elements(f, v.iter(), "frozenset([", "])",
+                                                              v.len(), false),
         }
     }
-}
-
-fn values_to_hashable(values: Vec<Value>) -> Result<Vec<HashableValue>, Error> {
-    values.into_iter().map(Value::to_hashable).collect()
-}
-
-fn hashable_to_values(values: Vec<HashableValue>) -> Vec<Value> {
-    values.into_iter().map(HashableValue::to_value).collect()
 }
 
 impl PartialEq for HashableValue {
@@ -234,7 +210,12 @@ impl PartialOrd for HashableValue {
 /// Implement a (more or less) consistent ordering for HashableValues
 /// so that they can be added to dictionaries and sets.
 ///
-/// This is done similar to Python 2's ordering of different types.
+/// Also, like in Python, numeric values with the same value (integral or not)
+/// must compare equal.
+///
+/// For other types, we define an ordering between all types A and B so that all
+/// objects of type A are always lesser than objects of type B.  This is done
+/// similar to Python 2's ordering of different types.
 impl Ord for HashableValue {
     fn cmp(&self, other: &HashableValue) -> Ordering {
         use self::HashableValue::*;
@@ -300,7 +281,7 @@ impl Ord for HashableValue {
     }
 }
 
-/// A reasonable total ordering for floats.
+/// A "reasonable" total ordering for floats.
 fn float_ord(f: f64, g: f64) -> Ordering {
     match f.partial_cmp(&g) {
         Some(o) => o,
@@ -308,616 +289,10 @@ fn float_ord(f: f64, g: f64) -> Ordering {
     }
 }
 
+/// Ordering between floats and big integers.
 fn float_bigint_ord(bi: &BigInt, g: f64) -> Ordering {
     match bi.to_f64() {
         Some(f) => float_ord(f, g),
         None => if bi.is_positive() { Ordering::Greater } else { Ordering::Less }
     }
-}
-
-impl de::Deserialize for Value {
-    #[inline]
-    fn deserialize<D>(deser: &mut D) -> Result<Value, D::Error> where D: de::Deserializer {
-        struct ValueVisitor;
-
-        impl de::Visitor for ValueVisitor {
-            type Value = Value;
-
-            #[inline]
-            fn visit_bool<E>(&mut self, value: bool) -> Result<Value, E> {
-                Ok(Value::Bool(value))
-            }
-
-            #[inline]
-            fn visit_i64<E>(&mut self, value: i64) -> Result<Value, E> {
-                Ok(Value::I64(value))
-            }
-
-            #[inline]
-            fn visit_u64<E>(&mut self, value: u64) -> Result<Value, E> {
-                if value < 0x8000_0000_0000_0000 {
-                    Ok(Value::I64(value as i64))
-                } else {
-                    Ok(Value::Int(BigInt::from(value)))
-                }
-            }
-
-            #[inline]
-            fn visit_f64<E>(&mut self, value: f64) -> Result<Value, E> {
-                Ok(Value::F64(value))
-            }
-
-            #[inline]
-            fn visit_str<E: de::Error>(&mut self, value: &str) -> Result<Value, E> {
-                self.visit_string(String::from(value))
-            }
-
-            #[inline]
-            fn visit_string<E>(&mut self, value: String) -> Result<Value, E> {
-                Ok(Value::String(value))
-            }
-
-            #[inline]
-            fn visit_bytes<E: de::Error>(&mut self, value: &[u8]) -> Result<Value, E> {
-                self.visit_byte_buf(value.to_vec())
-            }
-
-            #[inline]
-            fn visit_byte_buf<E: de::Error>(&mut self, value: Vec<u8>) -> Result<Value, E> {
-                Ok(Value::Bytes(value))
-            }
-
-            #[inline]
-            fn visit_none<E>(&mut self) -> Result<Value, E> {
-                Ok(Value::None)
-            }
-
-            #[inline]
-            fn visit_some<D>(&mut self, deser: &mut D) -> Result<Value, D::Error>
-                where D: de::Deserializer,
-            {
-                de::Deserialize::deserialize(deser)
-            }
-
-            #[inline]
-            fn visit_unit<E>(&mut self) -> Result<Value, E> {
-                Ok(Value::None)
-            }
-
-            #[inline]
-            fn visit_seq<V>(&mut self, visitor: V) -> Result<Value, V::Error>
-                where V: de::SeqVisitor,
-            {
-                let values = try!(de::impls::VecVisitor::new().visit_seq(visitor));
-                Ok(Value::List(values))
-            }
-
-            #[inline]
-            fn visit_map<V>(&mut self, visitor: V) -> Result<Value, V::Error>
-                where V: de::MapVisitor,
-            {
-                let values = try!(de::impls::BTreeMapVisitor::new().visit_map(visitor));
-                Ok(Value::Dict(values))
-            }
-        }
-
-        deser.deserialize(ValueVisitor)
-    }
-}
-
-impl de::Deserialize for HashableValue {
-    #[inline]
-    fn deserialize<D>(deser: &mut D) -> Result<HashableValue, D::Error> where D: de::Deserializer {
-        struct ValueVisitor;
-
-        impl de::Visitor for ValueVisitor {
-            type Value = HashableValue;
-
-            #[inline]
-            fn visit_bool<E>(&mut self, value: bool) -> Result<HashableValue, E> {
-                Ok(HashableValue::Bool(value))
-            }
-
-            #[inline]
-            fn visit_i64<E>(&mut self, value: i64) -> Result<HashableValue, E> {
-                Ok(HashableValue::I64(value))
-            }
-
-            #[inline]
-            fn visit_u64<E>(&mut self, value: u64) -> Result<HashableValue, E> {
-                if value < 0x8000_0000_0000_0000 {
-                    Ok(HashableValue::I64(value as i64))
-                } else {
-                    Ok(HashableValue::Int(BigInt::from(value)))
-                }
-            }
-
-            #[inline]
-            fn visit_f64<E>(&mut self, value: f64) -> Result<HashableValue, E> {
-                Ok(HashableValue::F64(value))
-            }
-
-            #[inline]
-            fn visit_str<E: de::Error>(&mut self, value: &str) -> Result<HashableValue, E> {
-                self.visit_string(String::from(value))
-            }
-
-            #[inline]
-            fn visit_string<E>(&mut self, value: String) -> Result<HashableValue, E> {
-                Ok(HashableValue::String(value))
-            }
-
-            #[inline]
-            fn visit_none<E>(&mut self) -> Result<HashableValue, E> {
-                Ok(HashableValue::None)
-            }
-
-            #[inline]
-            fn visit_some<D>(&mut self, deser: &mut D) -> Result<HashableValue, D::Error>
-                where D: de::Deserializer,
-            {
-                de::Deserialize::deserialize(deser)
-            }
-
-            #[inline]
-            fn visit_unit<E>(&mut self) -> Result<HashableValue, E> {
-                Ok(HashableValue::None)
-            }
-
-            #[inline]
-            fn visit_seq<V>(&mut self, visitor: V) -> Result<HashableValue, V::Error>
-                where V: de::SeqVisitor,
-            {
-                let values = try!(de::impls::VecVisitor::new().visit_seq(visitor));
-                Ok(HashableValue::Tuple(values))
-            }
-        }
-
-        deser.deserialize(ValueVisitor)
-    }
-}
-
-/// Deserializes a decoded value into any serde supported value.
-pub struct Deserializer {
-    value: Option<Value>,
-}
-
-impl Deserializer {
-    /// Creates a new deserializer instance for deserializing the specified JSON value.
-    pub fn new(value: Value) -> Deserializer {
-        Deserializer {
-            value: Some(value),
-        }
-    }
-}
-
-impl de::Deserializer for Deserializer {
-    type Error = Error;
-
-    fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value, Error>
-        where V: de::Visitor
-    {
-        let value = match self.value.take() {
-            Some(value) => value,
-            None => { return Err(de::Error::end_of_stream()); }
-        };
-
-        match value {
-            Value::None => visitor.visit_unit(),
-            Value::Bool(v) => visitor.visit_bool(v),
-            Value::I64(v) => visitor.visit_i64(v),
-            Value::Int(v) => {
-                if let Some(i) = v.to_i64() {
-                    visitor.visit_i64(i)
-                } else {
-                    return Err(de::Error::invalid_value("integer too large"));
-                }
-            },
-            Value::F64(v) => visitor.visit_f64(v),
-            Value::Bytes(v) => visitor.visit_byte_buf(v),
-            Value::String(v) => visitor.visit_string(v),
-            Value::List(v) => {
-                let len = v.len();
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    iter: v.into_iter(),
-                    len: len,
-                })
-            },
-            Value::Tuple(v) => {
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    len: v.len(),
-                    iter: v.into_iter(),
-                })
-            }
-            Value::Set(v) | Value::FrozenSet(v) => {
-                let v: Vec<_> = v.into_iter().map(HashableValue::to_value).collect();
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    len: v.len(),
-                    iter: v.into_iter(),
-                })
-            },
-            Value::Dict(v) => {
-                let len = v.len();
-                visitor.visit_map(MapDeserializer {
-                    de: self,
-                    iter: v.into_iter(),
-                    value: None,
-                    len: len,
-                })
-            },
-        }
-    }
-
-    #[inline]
-    fn deserialize_option<V>(&mut self, mut visitor: V) -> Result<V::Value, Error>
-        where V: de::Visitor,
-    {
-        match self.value {
-            Some(Value::None) => visitor.visit_none(),
-            Some(_) => visitor.visit_some(self),
-            None => Err(de::Error::end_of_stream()),
-        }
-    }
-
-    #[inline]
-    fn deserialize_unit_struct<V>(&mut self, _name: &str, visitor: V)
-                                  -> Result<V::Value, Error> where V: de::Visitor {
-        self.deserialize_unit(visitor)
-    }
-
-    #[inline]
-    fn deserialize_newtype_struct<V>(&mut self, _name: &str, mut visitor: V)
-                                     -> Result<V::Value, Error> where V: de::Visitor {
-        visitor.visit_newtype_struct(self)
-    }
-
-    #[inline]
-    fn deserialize_enum<V>(&mut self, _name: &str, _variants: &'static [&'static str],
-                           mut visitor: V) -> Result<V::Value, Error> where V: de::EnumVisitor {
-        visitor.visit(self)
-    }
-}
-
-impl de::VariantVisitor for Deserializer {
-    type Error = Error;
-
-    fn visit_variant<V>(&mut self) -> Result<V, Error> where V: de::Deserialize {
-        match self.value.take() {
-            Some(Value::Tuple(mut v)) => {
-                if v.len() == 2 {
-                    let args = v.pop();
-                    self.value = v.pop();
-                    let res = de::Deserialize::deserialize(self);
-                    self.value = args;
-                    res
-                } else {
-                    self.value = v.pop();
-                    de::Deserialize::deserialize(self)
-                }
-            }
-            _ => Err(Error::Syntax(ErrorCode::Custom("enums must be tuples".into())))
-        }
-    }
-
-    fn visit_unit(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn visit_newtype<T>(&mut self) -> Result<T, Error> where T: de::Deserialize {
-        de::Deserialize::deserialize(self)
-    }
-
-    fn visit_tuple<V>(&mut self, _len: usize, visitor: V) -> Result<V::Value, Error> where V: de::Visitor {
-        de::Deserializer::deserialize(self, visitor)
-    }
-
-    fn visit_struct<V>(&mut self, _fields: &'static [&'static str], visitor: V)
-                       -> Result<V::Value, Error> where V: de::Visitor {
-        de::Deserializer::deserialize(self, visitor)
-    }
-}
-
-struct SeqDeserializer<'a> {
-    de: &'a mut Deserializer,
-    iter: vec::IntoIter<Value>,
-    len: usize,
-}
-
-impl<'a> de::Deserializer for SeqDeserializer<'a> {
-    type Error = Error;
-
-    #[inline]
-    fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value, Error>
-        where V: de::Visitor,
-    {
-        visitor.visit_seq(self)
-    }
-}
-
-impl<'a> de::SeqVisitor for SeqDeserializer<'a> {
-    type Error = Error;
-
-    fn visit<T>(&mut self) -> Result<Option<T>, Error>
-        where T: de::Deserialize
-    {
-        match self.iter.next() {
-            Some(value) => {
-                self.len -= 1;
-                self.de.value = Some(value);
-                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn end(&mut self) -> Result<(), Error> {
-        if self.len == 0 {
-            Ok(())
-        } else {
-            Err(de::Error::invalid_length(self.len))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len, Some(self.len))
-    }
-}
-
-struct MapDeserializer<'a> {
-    de: &'a mut Deserializer,
-    iter: btree_map::IntoIter<HashableValue, Value>,
-    value: Option<Value>,
-    len: usize,
-}
-
-impl<'a> de::Deserializer for MapDeserializer<'a> {
-    type Error = Error;
-
-    #[inline]
-    fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value, Error>
-        where V: de::Visitor,
-    {
-        visitor.visit_map(self)
-    }
-}
-
-impl<'a> de::MapVisitor for MapDeserializer<'a> {
-    type Error = Error;
-
-    fn visit_key<T>(&mut self) -> Result<Option<T>, Error>
-        where T: de::Deserialize
-    {
-        match self.iter.next() {
-            Some((key, value)) => {
-                self.len -= 1;
-                self.value = Some(value);
-                self.de.value = Some(key.to_value());
-                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn visit_value<T>(&mut self) -> Result<T, Error>
-        where T: de::Deserialize
-    {
-        let value = self.value.take().unwrap();
-        self.de.value = Some(value);
-        Ok(try!(de::Deserialize::deserialize(self.de)))
-    }
-
-    fn end(&mut self) -> Result<(), Error> {
-        if self.len == 0 {
-            Ok(())
-        } else {
-            Err(de::Error::invalid_length(self.len))
-        }
-    }
-
-    fn missing_field<V>(&mut self, field: &'static str) -> Result<V, Error>
-        where V: de::Deserialize,
-    {
-        Err(de::Error::missing_field(field))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len, Some(self.len))
-    }
-}
-
-
-/// Create a `serde::Serializer` that serializes a `Serialize`e into a `Value`.
-pub struct Serializer {
-    values: Vec<Value>,
-}
-
-impl Serializer {
-    /// Construct a new `Serializer`.
-    pub fn new() -> Serializer {
-        Serializer {
-            values: Vec::with_capacity(16),
-        }
-    }
-
-    /// Unwrap the `Serializer` and return the `Value`.
-    pub fn finish(mut self) -> Result<Value, Error> {
-        self.values.pop().ok_or(ser::Error::custom("expected a value"))
-    }
-}
-
-impl ser::Serializer for Serializer {
-    type Error = Error;
-
-    #[inline]
-    fn serialize_bool(&mut self, value: bool) -> Result<(), Error> {
-        self.values.push(Value::Bool(value));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_i64(&mut self, value: i64) -> Result<(), Error> {
-        self.values.push(Value::I64(value));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_u64(&mut self, value: u64) -> Result<(), Error> {
-        if value < 0x8000_0000_0000_0000 {
-            self.values.push(Value::I64(value as i64));
-        } else {
-            self.values.push(Value::Int(BigInt::from(value)));
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_f64(&mut self, value: f64) -> Result<(), Error> {
-        self.values.push(Value::F64(value));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_char(&mut self, value: char) -> Result<(), Error> {
-        let mut s = String::new();
-        s.push(value);
-        self.values.push(Value::String(s));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_str(&mut self, value: &str) -> Result<(), Error> {
-        self.values.push(Value::String(String::from(value)));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_bytes(&mut self, value: &[u8]) -> Result<(), Error> {
-        self.values.push(Value::Bytes(value.to_vec()));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_none(&mut self) -> Result<(), Error> {
-        self.serialize_unit()
-    }
-
-    #[inline]
-    fn serialize_some<V>(&mut self, value: V) -> Result<(), Error>
-        where V: ser::Serialize,
-    {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_unit(&mut self) -> Result<(), Error> {
-        self.values.push(Value::None);
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_unit_variant(&mut self, _name: &str, _variant_index: usize, variant: &str)
-                              -> Result<(), Error> {
-        self.values.push(Value::Tuple(vec![Value::String(variant.into())]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_newtype_variant<T>(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                    value: T) -> Result<(), Error> where T: ser::Serialize {
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
-                                           try!(to_value(&value))]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_tuple_variant<V>(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                  visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
-        let mut ser = Serializer::new();
-        try!(ser.serialize_seq(visitor));
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
-                                           try!(ser.finish())]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_struct_variant<V>(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                   visitor: V) -> Result<(), Error> where V: ser::MapVisitor {
-        let mut ser = Serializer::new();
-        try!(ser.serialize_map(visitor));
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
-                                           try!(ser.finish())]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_unit_struct(&mut self, _name: &'static str) -> Result<(), Error> {
-        self.values.push(Value::Tuple(vec![]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_newtype_struct<T>(&mut self, _name: &'static str, value: T)
-                                   -> Result<(), Error> where T: ser::Serialize {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_tuple<V>(&mut self, mut visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
-        let mut ser = Serializer::new();
-        while let Some(()) = try!(visitor.visit(&mut ser)) { }
-        self.values.push(Value::Tuple(ser.values));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq<V>(&mut self, mut visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
-        let mut ser = Serializer::new();
-        while let Some(()) = try!(visitor.visit(&mut ser)) { }
-        self.values.push(Value::List(ser.values));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq_elt<T>(&mut self, value: T) -> Result<(), Error>
-        where T: ser::Serialize,
-    {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_map<V>(&mut self, mut visitor: V) -> Result<(), Error> where V: ser::MapVisitor {
-        let mut ser = Serializer::new();
-        while let Some(()) = try!(visitor.visit(&mut ser)) { }
-        let mut map = BTreeMap::new();
-        let mut iter = ser.values.into_iter();
-        while let Some(key) = iter.next() {
-            let value = iter.next().unwrap();
-            let key = try!(key.to_hashable());
-            map.insert(key, value);
-        }
-        self.values.push(Value::Dict(map));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_map_elt<K, V>(&mut self, key: K, value: V)
-                               -> Result<(), Error> where K: ser::Serialize, V: ser::Serialize {
-        try!(key.serialize(self));
-        value.serialize(self)
-    }
-}
-
-
-pub fn to_value<T: ser::Serialize + ?Sized>(value: &T) -> Result<Value, Error> {
-    let mut ser = Serializer::new();
-    value.serialize(&mut ser).ok().unwrap();
-    ser.finish()
-}
-
-pub fn from_value<T: de::Deserialize>(value: Value) -> Result<T, Error> {
-    let mut de = Deserializer::new(value);
-    de::Deserialize::deserialize(&mut de)
 }
