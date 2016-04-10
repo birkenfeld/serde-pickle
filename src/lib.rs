@@ -38,6 +38,8 @@
 //! correctly (un)pickle these types.
 
 #![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(custom_attribute, custom_derive, plugin))]
+#![cfg_attr(test, plugin(serde_macros))]
 
 extern crate serde;
 extern crate num_bigint;

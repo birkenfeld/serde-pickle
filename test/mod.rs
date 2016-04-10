@@ -10,6 +10,93 @@ extern crate serde_json;
 
 mod arby;
 
+macro_rules! treemap {
+    ($($k:expr => $v:expr),*) => {
+        {
+            let mut m = BTreeMap::new();
+            $(m.insert($k, $v);)*
+            m
+        }
+    };
+}
+
+mod struct_tests {
+    use std::fmt;
+    use serde::ser;
+    use {to_vec, value_from_slice, Value};
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct Inner {
+        a: (),
+        b: usize,
+        c: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct Outer {
+        inner: Vec<Inner>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct Unit;
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct Newtype(i32);
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct Tuple(i32, bool);
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    enum Animal {
+        Dog,
+        AntHive(Vec<String>),
+        Frog(String, Vec<isize>),
+        Cat { age: usize, name: String },
+    }
+
+    fn test_encode_ok<T>(value: T, json: &'static str)
+        where T: PartialEq + fmt::Debug + ser::Serialize,
+    {
+        let vec = to_vec(&value, true).unwrap();
+        let val: Value = value_from_slice(&vec).unwrap();
+        let ser_fmt = format!("{}", val);
+        assert_eq!(ser_fmt, json);
+    }
+
+    #[test]
+    fn encode_types() {
+        test_encode_ok((), "()");
+        test_encode_ok(None::<i32>, "None");
+        test_encode_ok(Some(false), "False");
+        test_encode_ok(4.5_f64, "4.5");
+    }
+
+    #[test]
+    fn encode_struct() {
+        test_encode_ok(Unit,
+                       r#"()"#);
+        test_encode_ok(Newtype(42),
+                       r#"42"#);
+        test_encode_ok(Tuple(42, false),
+                       r#"(42, False)"#);
+        test_encode_ok(Inner { a: (), b: 32, c: vec!["doc".into()] },
+                       r#"{"a": (), "b": 32, "c": ["doc"]}"#);
+    }
+
+    #[test]
+    fn encode_enum() {
+        test_encode_ok(Animal::Dog,
+                       r#"("Dog", )"#);
+        test_encode_ok(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
+                       r#"("AntHive", ["ant", "aunt"])"#);
+        test_encode_ok(Animal::Frog("Henry".into(), vec![1, 5]),
+                       r#"("Frog", ["Henry", [1, 5]])"#);
+        test_encode_ok(Animal::Cat { age: 5, name: "Molyneux".into() },
+                       r#"("Cat", {"age": 5, "name": "Molyneux"})"#);
+    }
+}
+
 mod value_tests {
     use std::fs::File;
     use std::collections::{BTreeMap, BTreeSet};
@@ -31,26 +118,25 @@ mod value_tests {
     fn get_test_object() -> Value {
         // Reproduces the test_object from test/data/generate.py.
         let longish = BigInt::from(10000000000u64) * BigInt::from(10000000000u64);
-        let mut map = BTreeMap::new();
-        map.insert(HashableValue::None, Value::None);
-        map.insert(HashableValue::Bool(false), Value::Tuple(vec![Value::Bool(false),
-                                                                 Value::Bool(true)]));
-        map.insert(HashableValue::I64(10), Value::I64(100000));
-        map.insert(HashableValue::Int(longish.clone()), Value::Int(longish));
-        map.insert(HashableValue::F64(1.0), Value::F64(1.0));
-        map.insert(HashableValue::Bytes(b"bytes".to_vec()), Value::Bytes(b"bytes".to_vec()));
-        map.insert(HashableValue::String("string".into()), Value::String("string".into()));
-        map.insert(HashableValue::Tuple(vec![HashableValue::I64(1), HashableValue::I64(2)]),
-                   Value::Tuple(vec![Value::I64(1), Value::I64(2), Value::I64(3)]));
         let set = BTreeSet::from_iter(vec![HashableValue::I64(42), HashableValue::I64(0)]);
-        map.insert(HashableValue::FrozenSet(set.clone()), Value::FrozenSet(set.clone()));
-        map.insert(HashableValue::Tuple(vec![]),
-                   Value::List(vec![
-                       Value::List(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
-                       Value::Set(set),
-                       Value::Dict(BTreeMap::new())
-                   ]));
-        Value::Dict(map)
+        Value::Dict(treemap!(
+            HashableValue::None => Value::None,
+            HashableValue::Bool(false) => Value::Tuple(vec![Value::Bool(false),
+                                                            Value::Bool(true)]),
+            HashableValue::I64(10) => Value::I64(100000),
+            HashableValue::Int(longish.clone()) => Value::Int(longish),
+            HashableValue::F64(1.0) => Value::F64(1.0),
+            HashableValue::Bytes(b"bytes".to_vec()) => Value::Bytes(b"bytes".to_vec()),
+            HashableValue::String("string".into()) => Value::String("string".into()),
+            HashableValue::FrozenSet(set.clone()) => Value::FrozenSet(set.clone()),
+            HashableValue::Tuple(vec![HashableValue::I64(1), HashableValue::I64(2)]) =>
+                Value::Tuple(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
+            HashableValue::Tuple(vec![]) =>
+                Value::List(vec![
+                    Value::List(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
+                    Value::Set(set),
+                    Value::Dict(BTreeMap::new())
+                ])))
     }
 
     #[test]

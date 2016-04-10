@@ -6,6 +6,7 @@
 
 //! Python values, and serialization instances for them.
 
+use std::fmt;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_map;
@@ -99,12 +100,114 @@ impl HashableValue {
     }
 }
 
-// fn make_hashable(value: Value, pos: usize) -> Result<HashableValue> {
-//     match value.to_hashable() {
-//         Some(v) => Ok(v),
-//         None    => Err(Error::Eval(ErrorCode::ValueNotHashable, pos))
-//     }
-// }
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Value::None             => write!(f, "None"),
+            Value::Bool(b)          => write!(f, "{}", if b { "True" } else { "False" }),
+            Value::I64(i)           => write!(f, "{}", i),
+            Value::Int(ref i)       => write!(f, "{}", i),
+            Value::F64(v)           => write!(f, "{}", v),
+            Value::Bytes(ref b)     => write!(f, "b{:?}", b), //
+            Value::String(ref s)    => write!(f, "{:?}", s),
+            Value::List(ref v)     => {
+                try!(write!(f, "["));
+                for (i, item) in v.iter().enumerate() {
+                    if i < v.len() - 1 {
+                        try!(write!(f, "{}, ", item));
+                    } else {
+                        try!(write!(f, "{}", item));
+                    }
+                }
+                write!(f, "]")
+            },
+            Value::Tuple(ref v)     => {
+                try!(write!(f, "("));
+                for (i, item) in v.iter().enumerate() {
+                    if i < v.len() - 1 || v.len() == 1 {
+                        try!(write!(f, "{}, ", item));
+                    } else {
+                        try!(write!(f, "{}", item));
+                    }
+                }
+                write!(f, ")")
+            },
+            Value::Set(ref v) => {
+                if v.len() == 0 {
+                    write!(f, "set()")
+                } else {
+                    try!(write!(f, "{{"));
+                    for (i, item) in v.iter().enumerate() {
+                        if i < v.len() - 1 {
+                            try!(write!(f, "{}, ", item));
+                        } else {
+                            try!(write!(f, "{}", item));
+                        }
+                    }
+                    write!(f, "}}")
+                }
+            },
+            Value::FrozenSet(ref v) => {
+                try!(write!(f, "frozenset(["));
+                for (i, item) in v.iter().enumerate() {
+                    if i < v.len() - 1 {
+                        try!(write!(f, "{}, ", item));
+                    } else {
+                        try!(write!(f, "{}", item));
+                    }
+                }
+                write!(f, "])")
+            },
+            Value::Dict(ref v) => {
+                try!(write!(f, "{{"));
+                for (i, (key, value)) in v.iter().enumerate() {
+                    if i < v.len() - 1 {
+                        try!(write!(f, "{}: {}, ", key, value));
+                    } else {
+                        try!(write!(f, "{}: {}", key, value));
+                    }
+                }
+                write!(f, "}}")
+            },
+        }
+    }
+}
+
+impl fmt::Display for HashableValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            HashableValue::None             => write!(f, "None"),
+            HashableValue::Bool(b)          => write!(f, "{}", if b { "True" } else { "False" }),
+            HashableValue::I64(i)           => write!(f, "{}", i),
+            HashableValue::Int(ref i)       => write!(f, "{}", i),
+            HashableValue::F64(v)           => write!(f, "{}", v),
+            HashableValue::Bytes(ref b)     => write!(f, "b{:?}", b), //
+            HashableValue::String(ref s)    => write!(f, "{:?}", s),
+            HashableValue::Tuple(ref v)     => {
+                try!(write!(f, "("));
+                for (i, item) in v.iter().enumerate() {
+                    if i < v.len() - 1 || v.len() == 1 {
+                        try!(write!(f, "{}, ", item));
+                    } else {
+                        try!(write!(f, "{}", item));
+                    }
+                }
+                write!(f, ")")
+            },
+            HashableValue::FrozenSet(ref v) => {
+                try!(write!(f, "frozenset(["));
+                for (i, item) in v.iter().enumerate() {
+                    if i < v.len() - 1 {
+                        try!(write!(f, "{}, ", item));
+                    } else {
+                        try!(write!(f, "{}", item));
+                    }
+                }
+                write!(f, "])")
+            },
+        }
+    }
+}
 
 fn values_to_hashable(values: Vec<Value>) -> Result<Vec<HashableValue>, Error> {
     values.into_iter().map(Value::to_hashable).collect()

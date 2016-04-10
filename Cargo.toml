@@ -9,6 +9,7 @@ keywords = ["pickle", "python", "serde", "serialization"]
 
 # For the example binary.
 [dev-dependencies]
+serde_macros = "0.7.0"
 serde_json = "0.7.0"
 rand = "0.3.14"
 quickcheck = "0.2.27"

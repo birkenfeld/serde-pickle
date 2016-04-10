@@ -135,6 +135,9 @@ impl<W: io::Write> Serializer<W> {
             let nbytes = i.to_bytes_le().1.len();
             let pos = i + (BigInt::from(1) << nbytes * 8);
             let mut bytes = pos.to_bytes_le().1;
+            while bytes.len() < nbytes {
+                bytes.push(0x00);
+            }
             if bytes.last().unwrap() < &0x80 {
                 bytes.push(0xff);
             }

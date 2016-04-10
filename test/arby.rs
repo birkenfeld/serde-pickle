@@ -8,7 +8,6 @@
 
 use std::i64;
 use num_bigint::BigInt;
-use num_traits::{Signed, Zero};
 use super::quickcheck::{Arbitrary, Gen, empty_shrinker};
 use {Value, HashableValue};
 
@@ -21,10 +20,7 @@ fn gen_value<G: Gen>(g: &mut G, depth: u32) -> Value {
         0  => Value::None,
         1  => Value::Bool(Arbitrary::arbitrary(g)),
         2  => Value::I64(Arbitrary::arbitrary(g)),
-        3  => { // We have to construct a value outside of i64 range.
-                let val: i64 = Arbitrary::arbitrary(g);
-                let max = BigInt::from(i64::MAX);
-                Value::Int(BigInt::from(val) + BigInt::from(2) * max) },
+        3  => Value::Int(gen_bigint(g)),
         4  => Value::F64(Arbitrary::arbitrary(g)),
         5  => Value::Bytes(Arbitrary::arbitrary(g)),
         6  => Value::String(Arbitrary::arbitrary(g)),
@@ -38,6 +34,15 @@ fn gen_value<G: Gen>(g: &mut G, depth: u32) -> Value {
                 Value::Dict(kvec.into_iter().zip(vvec).collect()) },
         _  => unreachable!(),
     }
+}
+
+fn gen_bigint<G: Gen>(g: &mut G) -> BigInt {
+    // We have to construct a value outside of i64 range, since other values
+    // are unpickled as i64s instead of big ints.
+    let offset = BigInt::from(2) * BigInt::from(if g.gen() { i64::MIN } else { i64::MAX });
+    let result = offset + BigInt::from(g.gen::<i64>());
+    println!("{}", result);
+    result
 }
 
 fn gen_vec<G: Gen>(g: &mut G, depth: u32) -> Vec<Value> {
@@ -81,7 +86,7 @@ impl Arbitrary for Value {
             Value::None => empty_shrinker(),
             Value::Bool(v) => Box::new(Arbitrary::shrink(&v).map(Value::Bool)),
             Value::I64(v) => Box::new(Arbitrary::shrink(&v).map(Value::I64)),
-            Value::Int(ref v) => Box::new(BigIntShrinker::new(v.clone()).map(Value::Int)),
+            Value::Int(_) => empty_shrinker(),
             Value::F64(v) => Box::new(Arbitrary::shrink(&v).map(Value::F64)),
             Value::Bytes(ref v) => Box::new(Arbitrary::shrink(v).map(Value::Bytes)),
             Value::String(ref v) => Box::new(Arbitrary::shrink(v).map(Value::String)),
@@ -104,49 +109,12 @@ impl Arbitrary for HashableValue {
             HashableValue::None => empty_shrinker(),
             HashableValue::Bool(v) => Box::new(Arbitrary::shrink(&v).map(HashableValue::Bool)),
             HashableValue::I64(v) => Box::new(Arbitrary::shrink(&v).map(HashableValue::I64)),
-            HashableValue::Int(ref v) => Box::new(BigIntShrinker::new(v.clone()).map(HashableValue::Int)),
+            HashableValue::Int(_) => empty_shrinker(),
             HashableValue::F64(v) => Box::new(Arbitrary::shrink(&v).map(HashableValue::F64)),
             HashableValue::Bytes(ref v) => Box::new(Arbitrary::shrink(v).map(HashableValue::Bytes)),
             HashableValue::String(ref v) => Box::new(Arbitrary::shrink(v).map(HashableValue::String)),
             HashableValue::Tuple(ref v) => Box::new(Arbitrary::shrink(v).map(HashableValue::Tuple)),
             HashableValue::FrozenSet(ref v) => Box::new(Arbitrary::shrink(v).map(HashableValue::FrozenSet)),
-        }
-    }
-}
-
-pub struct BigIntShrinker {
-    x: BigInt,
-    i: BigInt,
-}
-
-impl BigIntShrinker {
-    pub fn new(x: BigInt) -> Box<Iterator<Item=BigInt>> {
-        if x == BigInt::zero() {
-            empty_shrinker()
-        } else {
-            let shrinker = BigIntShrinker {
-                x: x.clone(),
-                i: x / BigInt::from(2),
-            };
-            let mut items = vec![BigInt::zero()];
-            if shrinker.i < BigInt::zero() {
-                items.push(shrinker.x.abs());
-            }
-            Box::new(items.into_iter().chain(shrinker))
-        }
-    }
-}
-
-impl Iterator for BigIntShrinker {
-    type Item = BigInt;
-    fn next(&mut self) -> Option<BigInt> {
-        let diff = &self.x - &self.i;
-        if diff.abs() < self.x.abs() {
-            let result = Some(&self.x - &self.i);
-            self.i = &self.i / BigInt::from(2);
-            result
-        } else {
-            None
         }
     }
 }
