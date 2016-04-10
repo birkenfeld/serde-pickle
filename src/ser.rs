@@ -327,7 +327,15 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
 
     #[inline]
     fn serialize_unit(&mut self) -> Result<()> {
+        // Although Python has an empty tuple, we use None here for compatibility
+        // with other serialization formats.
         self.write_opcode(NONE)
+    }
+
+    /// Override `visit_unit_struct` to serialize unit structs as ().
+    #[inline]
+    fn serialize_unit_struct(&mut self, _name: &'static str) -> Result<()> {
+        self.write_opcode(EMPTY_TUPLE)
     }
 
     /// Override `visit_newtype_struct` to serialize newtypes without an object wrapper.

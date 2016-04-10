@@ -40,9 +40,7 @@ fn gen_bigint<G: Gen>(g: &mut G) -> BigInt {
     // We have to construct a value outside of i64 range, since other values
     // are unpickled as i64s instead of big ints.
     let offset = BigInt::from(2) * BigInt::from(if g.gen() { i64::MIN } else { i64::MAX });
-    let result = offset + BigInt::from(g.gen::<i64>());
-    println!("{}", result);
-    result
+    offset + BigInt::from(g.gen::<i64>())
 }
 
 fn gen_vec<G: Gen>(g: &mut G, depth: u32) -> Vec<Value> {

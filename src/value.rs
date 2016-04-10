@@ -358,6 +358,16 @@ impl de::Deserialize for Value {
             }
 
             #[inline]
+            fn visit_bytes<E: de::Error>(&mut self, value: &[u8]) -> Result<Value, E> {
+                self.visit_byte_buf(value.to_vec())
+            }
+
+            #[inline]
+            fn visit_byte_buf<E: de::Error>(&mut self, value: Vec<u8>) -> Result<Value, E> {
+                Ok(Value::Bytes(value))
+            }
+
+            #[inline]
             fn visit_none<E>(&mut self) -> Result<Value, E> {
                 Ok(Value::None)
             }
@@ -551,6 +561,63 @@ impl de::Deserializer for Deserializer {
             None => Err(de::Error::end_of_stream()),
         }
     }
+
+    #[inline]
+    fn deserialize_unit_struct<V>(&mut self, _name: &str, visitor: V)
+                                  -> Result<V::Value, Error> where V: de::Visitor {
+        self.deserialize_unit(visitor)
+    }
+
+    #[inline]
+    fn deserialize_newtype_struct<V>(&mut self, _name: &str, mut visitor: V)
+                                     -> Result<V::Value, Error> where V: de::Visitor {
+        visitor.visit_newtype_struct(self)
+    }
+
+    #[inline]
+    fn deserialize_enum<V>(&mut self, _name: &str, _variants: &'static [&'static str],
+                           mut visitor: V) -> Result<V::Value, Error> where V: de::EnumVisitor {
+        visitor.visit(self)
+    }
+}
+
+impl de::VariantVisitor for Deserializer {
+    type Error = Error;
+
+    fn visit_variant<V>(&mut self) -> Result<V, Error> where V: de::Deserialize {
+        match self.value.take() {
+            Some(Value::Tuple(mut v)) => {
+                if v.len() == 2 {
+                    let args = v.pop();
+                    self.value = v.pop();
+                    let res = de::Deserialize::deserialize(self);
+                    self.value = args;
+                    res
+                } else {
+                    self.value = v.pop();
+                    de::Deserialize::deserialize(self)
+                }
+            }
+            _ => Err(Error::Syntax(ErrorCode::Custom("enums must be tuples".into())))
+        }
+    }
+
+    fn visit_unit(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn visit_newtype<T>(&mut self) -> Result<T, Error> where T: de::Deserialize {
+        de::Deserialize::deserialize(self)
+    }
+
+    fn visit_tuple<V>(&mut self, _len: usize, visitor: V) -> Result<V::Value, Error> where V: de::Visitor {
+        de::Deserializer::deserialize(self, visitor)
+    }
+
+    fn visit_struct<V>(&mut self, _fields: &'static [&'static str], visitor: V)
+                       -> Result<V::Value, Error> where V: de::Visitor {
+        de::Deserializer::deserialize(self, visitor)
+    }
 }
 
 struct SeqDeserializer<'a> {
@@ -676,8 +743,8 @@ impl Serializer {
     }
 
     /// Unwrap the `Serializer` and return the `Value`.
-    pub fn unwrap(mut self) -> Value {
-        self.values.pop().expect("expected a value")
+    pub fn finish(mut self) -> Result<Value, Error> {
+        self.values.pop().ok_or(ser::Error::custom("expected a value"))
     }
 }
 
@@ -760,7 +827,8 @@ impl ser::Serializer for Serializer {
     #[inline]
     fn serialize_newtype_variant<T>(&mut self, _name: &str, _variant_index: usize, variant: &str,
                                     value: T) -> Result<(), Error> where T: ser::Serialize {
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()), to_value(&value)]));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
+                                           try!(to_value(&value))]));
         Ok(())
     }
 
@@ -769,7 +837,8 @@ impl ser::Serializer for Serializer {
                                   visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
         let mut ser = Serializer::new();
         try!(ser.serialize_seq(visitor));
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()), ser.unwrap()]));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
+                                           try!(ser.finish())]));
         Ok(())
     }
 
@@ -778,7 +847,28 @@ impl ser::Serializer for Serializer {
                                    visitor: V) -> Result<(), Error> where V: ser::MapVisitor {
         let mut ser = Serializer::new();
         try!(ser.serialize_map(visitor));
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()), ser.unwrap()]));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
+                                           try!(ser.finish())]));
+        Ok(())
+    }
+
+    #[inline]
+    fn serialize_unit_struct(&mut self, _name: &'static str) -> Result<(), Error> {
+        self.values.push(Value::Tuple(vec![]));
+        Ok(())
+    }
+
+    #[inline]
+    fn serialize_newtype_struct<T>(&mut self, _name: &'static str, value: T)
+                                   -> Result<(), Error> where T: ser::Serialize {
+        value.serialize(self)
+    }
+
+    #[inline]
+    fn serialize_tuple<V>(&mut self, mut visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
+        let mut ser = Serializer::new();
+        while let Some(()) = try!(visitor.visit(&mut ser)) { }
+        self.values.push(Value::Tuple(ser.values));
         Ok(())
     }
 
@@ -821,10 +911,10 @@ impl ser::Serializer for Serializer {
 }
 
 
-pub fn to_value<T: ser::Serialize + ?Sized>(value: &T) -> Value {
+pub fn to_value<T: ser::Serialize + ?Sized>(value: &T) -> Result<Value, Error> {
     let mut ser = Serializer::new();
     value.serialize(&mut ser).ok().unwrap();
-    ser.unwrap()
+    ser.finish()
 }
 
 pub fn from_value<T: de::Deserialize>(value: Value) -> Result<T, Error> {

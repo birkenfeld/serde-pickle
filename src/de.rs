@@ -124,6 +124,13 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    fn get_next_value(&mut self) -> Result<Value> {
+        match self.value.take() {
+            Some(v) => Ok(v),
+            None => self.parse_value(),
+        }
+    }
+
     fn parse_value(&mut self) -> Result<Value> {
         loop {
             match try!(self.read_byte()) {
@@ -803,11 +810,7 @@ impl<Iter> de::Deserializer for Deserializer<Iter>
     fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value>
         where V: de::Visitor
     {
-        let value = match self.value.take() {
-            Some(v) => v,
-            None => try!(self.parse_value()),
-        };
-
+        let value = try!(self.get_next_value());
         match value {
             Value::None => visitor.visit_unit(),
             Value::Bool(v) => visitor.visit_bool(v),
@@ -861,6 +864,80 @@ impl<Iter> de::Deserializer for Deserializer<Iter>
             },
             Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
         }
+    }
+
+    #[inline]
+    fn deserialize_option<V>(&mut self, mut visitor: V) -> Result<V::Value>
+        where V: de::Visitor,
+    {
+        let value = try!(self.get_next_value());
+        match value {
+            Value::None => visitor.visit_none(),
+            _           => {
+                self.value = Some(value);
+                visitor.visit_some(self)
+            }
+        }
+    }
+
+    #[inline]
+    fn deserialize_unit_struct<V>(&mut self, _name: &str, visitor: V)
+                                  -> Result<V::Value> where V: de::Visitor {
+        self.deserialize_unit(visitor)
+    }
+
+    #[inline]
+    fn deserialize_newtype_struct<V>(&mut self, _name: &str, mut visitor: V)
+                                     -> Result<V::Value> where V: de::Visitor {
+        visitor.visit_newtype_struct(self)
+    }
+
+    #[inline]
+    fn deserialize_enum<V>(&mut self, _name: &str, _variants: &'static [&'static str],
+                           mut visitor: V) -> Result<V::Value> where V: de::EnumVisitor {
+        visitor.visit(self)
+    }
+}
+
+impl<Iter> de::VariantVisitor for Deserializer<Iter>
+    where Iter: Iterator<Item=io::Result<u8>>
+{
+    type Error = Error;
+
+    fn visit_variant<V>(&mut self) -> Result<V> where V: de::Deserialize {
+        let value = try!(self.get_next_value());
+        match value {
+            Value::Tuple(mut v) => {
+                if v.len() == 2 {
+                    let args = v.pop();
+                    self.value = v.pop();
+                    let res = de::Deserialize::deserialize(self);
+                    self.value = args;
+                    res
+                } else {
+                    self.value = v.pop();
+                    de::Deserialize::deserialize(self)
+                }
+            }
+             _ => Err(Error::Syntax(ErrorCode::Custom("enums must be tuples".into())))
+        }
+    }
+
+    fn visit_unit(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn visit_newtype<T>(&mut self) -> Result<T> where T: de::Deserialize {
+        de::Deserialize::deserialize(self)
+    }
+
+    fn visit_tuple<V>(&mut self, _len: usize, visitor: V) -> Result<V::Value> where V: de::Visitor {
+        de::Deserializer::deserialize(self, visitor)
+    }
+
+    fn visit_struct<V>(&mut self, _fields: &'static [&'static str], visitor: V)
+                       -> Result<V::Value> where V: de::Visitor {
+        de::Deserializer::deserialize(self, visitor)
     }
 }
 

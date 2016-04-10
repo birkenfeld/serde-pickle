@@ -10,20 +10,44 @@ extern crate serde_json;
 
 mod arby;
 
-macro_rules! treemap {
-    ($($k:expr => $v:expr),*) => {
-        {
-            let mut m = BTreeMap::new();
-            $(m.insert($k, $v);)*
-            m
-        }
-    };
+macro_rules! pyobj {
+    (n=None)     => { Value::None };
+    (b=True)     => { Value::Bool(true) };
+    (b=False)    => { Value::Bool(false) };
+    (i=$i:expr)  => { Value::I64($i) };
+    (ii=$i:expr) => { Value::Int($i.clone()) };
+    (f=$f:expr)  => { Value::F64($f) };
+    (bb=$b:expr) => { Value::Bytes($b.to_vec()) };
+    (s=$s:expr)  => { Value::String($s.into()) };
+    (t=($($m:ident=$v:tt),*))  => { Value::Tuple(vec![$(pyobj!($m=$v)),*]) };
+    (l=[$($m:ident=$v:tt),*])  => { Value::List(vec![$(pyobj!($m=$v)),*]) };
+    (ss=($($m:ident=$v:tt),*)) => { Value::Set(BTreeSet::from_iter(vec![$(hpyobj!($m=$v)),*])) };
+    (fs=($($m:ident=$v:tt),*)) => { Value::FrozenSet(BTreeSet::from_iter(vec![$(hpyobj!($m=$v)),*])) };
+    (d={$($km:ident=$kv:tt => $vm:ident=$vv:tt),*}) => {
+        Value::Dict(BTreeMap::from_iter(vec![$((hpyobj!($km=$kv),
+                                                pyobj!($vm=$vv))),*])) };
+}
+
+macro_rules! hpyobj {
+    (n=None)     => { HashableValue::None };
+    (b=True)     => { HashableValue::Bool(true) };
+    (b=False)    => { HashableValue::Bool(false) };
+    (i=$i:expr)  => { HashableValue::I64($i) };
+    (ii=$i:expr) => { HashableValue::Int($i.clone()) };
+    (f=$f:expr)  => { HashableValue::F64($f) };
+    (bb=$b:expr) => { HashableValue::Bytes($b.to_vec()) };
+    (s=$s:expr)  => { HashableValue::String($s.into()) };
+    (t=($($m:ident=$v:tt),*))  => { HashableValue::Tuple(vec![$(hpyobj!($m=$v)),*]) };
+    (fs=($($m:ident=$v:tt),*)) => { HashableValue::FrozenSet(BTreeSet::from_iter(vec![$(hpyobj!($m=$v)),*])) };
 }
 
 mod struct_tests {
     use std::fmt;
-    use serde::ser;
-    use {to_vec, value_from_slice, Value};
+    use std::iter::FromIterator;
+    use std::collections::BTreeMap;
+    use serde::{ser, de};
+    use {to_vec, value_to_vec, from_slice, value_from_slice, to_value, from_value,
+         Value, HashableValue};
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Inner {
@@ -55,45 +79,118 @@ mod struct_tests {
         Cat { age: usize, name: String },
     }
 
-    fn test_encode_ok<T>(value: T, json: &'static str)
-        where T: PartialEq + fmt::Debug + ser::Serialize,
+    fn test_encode_ok<T>(value: T, target: Value)
+        where T: PartialEq + ser::Serialize,
     {
+        // Test serialization via pickle.
         let vec = to_vec(&value, true).unwrap();
-        let val: Value = value_from_slice(&vec).unwrap();
-        let ser_fmt = format!("{}", val);
-        assert_eq!(ser_fmt, json);
+        let py_val: Value = value_from_slice(&vec).unwrap();
+        assert_eq!(py_val, target);
+        // Test direct serialization to Value.
+        let py_val: Value = to_value(&value).unwrap();
+        assert_eq!(py_val, target);
+    }
+
+    fn test_decode_ok<T>(pyvalue: Value, target: T)
+        where T: PartialEq + fmt::Debug + de::Deserialize,
+    {
+        // Test deserialization from pickle.
+        let vec = value_to_vec(&pyvalue, true).unwrap();
+        let val: T = from_slice(&vec).unwrap();
+        assert_eq!(val, target);
+        // Test direct deserialization from Value.
+        let val: T = from_value(pyvalue).unwrap();
+        assert_eq!(val, target);
     }
 
     #[test]
     fn encode_types() {
-        test_encode_ok((), "()");
-        test_encode_ok(None::<i32>, "None");
-        test_encode_ok(Some(false), "False");
-        test_encode_ok(4.5_f64, "4.5");
+        test_encode_ok((), pyobj!(n=None));
+        test_encode_ok(true, pyobj!(b=True));
+        test_encode_ok(None::<i32>, pyobj!(n=None));
+        test_encode_ok(Some(false), pyobj!(b=False));
+        test_encode_ok(10000000000_i64, pyobj!(i=10000000000));
+        test_encode_ok(4.5_f64, pyobj!(f=4.5));
+        test_encode_ok('ä', pyobj!(s="ä"));
+        test_encode_ok("string", pyobj!(s="string"));
+        // serde doesn't encode into bytes...
+        test_encode_ok(b"\x00\x01", pyobj!(l=[i=0, i=1]));
+        test_encode_ok(vec![1, 2, 3], pyobj!(l=[i=1, i=2, i=3]));
+        test_encode_ok((1, 2, 3), pyobj!(t=(i=1, i=2, i=3)));
+        test_encode_ok([1, 2, 3], pyobj!(l=[i=1, i=2, i=3]));
+        test_encode_ok(BTreeMap::from_iter(vec![(1, 2), (3, 4)]),
+                       pyobj!(d={i=1 => i=2, i=3 => i=4}));
     }
 
     #[test]
     fn encode_struct() {
         test_encode_ok(Unit,
-                       r#"()"#);
+                       pyobj!(t=()));
         test_encode_ok(Newtype(42),
-                       r#"42"#);
+                       pyobj!(i=42));
         test_encode_ok(Tuple(42, false),
-                       r#"(42, False)"#);
+                       pyobj!(t=(i=42, b=False)));
         test_encode_ok(Inner { a: (), b: 32, c: vec!["doc".into()] },
-                       r#"{"a": (), "b": 32, "c": ["doc"]}"#);
+                       pyobj!(d={s="a" => n=None, s="b" => i=32,
+                                 s="c" => l=[s="doc"]}));
     }
 
     #[test]
     fn encode_enum() {
         test_encode_ok(Animal::Dog,
-                       r#"("Dog", )"#);
+                       pyobj!(t=(s="Dog")));
         test_encode_ok(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
-                       r#"("AntHive", ["ant", "aunt"])"#);
+                       pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])));
         test_encode_ok(Animal::Frog("Henry".into(), vec![1, 5]),
-                       r#"("Frog", ["Henry", [1, 5]])"#);
+                       pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])));
         test_encode_ok(Animal::Cat { age: 5, name: "Molyneux".into() },
-                       r#"("Cat", {"age": 5, "name": "Molyneux"})"#);
+                       pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})));
+    }
+
+    #[test]
+    fn decode_types() {
+        test_decode_ok(pyobj!(n=None), ());
+        test_decode_ok(pyobj!(b=True), true);
+        test_decode_ok(pyobj!(b=True), Some(true));
+        test_decode_ok::<Option<bool>>(pyobj!(n=None), None);
+        test_decode_ok(pyobj!(i=10000000000), 10000000000_i64);
+        test_decode_ok(pyobj!(f=4.5), 4.5_f64);
+        test_decode_ok(pyobj!(s="ä"), 'ä');
+        test_decode_ok(pyobj!(s="string"), String::from("string"));
+        // Vec<u8> doesn't decode from serde bytes...
+        test_decode_ok(pyobj!(bb=b"bytes"), String::from("bytes"));
+        test_decode_ok(pyobj!(l=[i=1, i=2, i=3]), vec![1, 2, 3]);
+        test_decode_ok(pyobj!(t=(i=1, i=2, i=3)), (1, 2, 3));
+        test_decode_ok(pyobj!(l=[i=1, i=2, i=3]), [1, 2, 3]);
+        test_decode_ok(pyobj!(d={i=1 => i=2, i=3 => i=4}),
+                       BTreeMap::from_iter(vec![(1, 2), (3, 4)]));
+    }
+
+    #[test]
+    fn decode_struct() {
+        test_decode_ok(pyobj!(t=()),
+                       Unit);
+        test_decode_ok(pyobj!(i=42),
+                       Newtype(42));
+        test_decode_ok(pyobj!(t=(i=42, b=False)),
+                       Tuple(42, false));
+        test_decode_ok(pyobj!(d={s="a" => n=None, s="b" => i=32, s="c" => l=[s="doc"]}),
+                       Inner { a: (), b: 32, c: vec!["doc".into()] });
+    }
+
+    #[test]
+    fn decode_enum() {
+        test_decode_ok(pyobj!(t=(s="Dog")),
+                       Animal::Dog);
+        test_decode_ok(pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])),
+                       Animal::AntHive(vec!["ant".into(), "aunt".into()]));
+        test_decode_ok(pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])),
+                       Animal::Frog("Henry".into(), vec![1, 5]));
+        test_decode_ok(pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})),
+                       Animal::Cat { age: 5, name: "Molyneux".into() });
+        test_decode_ok(pyobj!(l=[t=(s="Dog"), t=(s="Dog"),
+                                 t=(s="Cat", d={s="age" => i=5, s="name" => s="?"})]),
+                       vec![Animal::Dog, Animal::Dog, Animal::Cat { age: 5, name: "?".into() }]);
     }
 }
 
@@ -118,25 +215,22 @@ mod value_tests {
     fn get_test_object() -> Value {
         // Reproduces the test_object from test/data/generate.py.
         let longish = BigInt::from(10000000000u64) * BigInt::from(10000000000u64);
-        let set = BTreeSet::from_iter(vec![HashableValue::I64(42), HashableValue::I64(0)]);
-        Value::Dict(treemap!(
-            HashableValue::None => Value::None,
-            HashableValue::Bool(false) => Value::Tuple(vec![Value::Bool(false),
-                                                            Value::Bool(true)]),
-            HashableValue::I64(10) => Value::I64(100000),
-            HashableValue::Int(longish.clone()) => Value::Int(longish),
-            HashableValue::F64(1.0) => Value::F64(1.0),
-            HashableValue::Bytes(b"bytes".to_vec()) => Value::Bytes(b"bytes".to_vec()),
-            HashableValue::String("string".into()) => Value::String("string".into()),
-            HashableValue::FrozenSet(set.clone()) => Value::FrozenSet(set.clone()),
-            HashableValue::Tuple(vec![HashableValue::I64(1), HashableValue::I64(2)]) =>
-                Value::Tuple(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
-            HashableValue::Tuple(vec![]) =>
-                Value::List(vec![
-                    Value::List(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
-                    Value::Set(set),
-                    Value::Dict(BTreeMap::new())
-                ])))
+        pyobj!(d={
+            n=None           => n=None,
+            b=False          => t=(b=False, b=True),
+            i=10             => i=100000,
+            ii=longish       => ii=longish,
+            f=1.0            => f=1.0,
+            bb=b"bytes"      => bb=b"bytes",
+            s="string"       => s="string",
+            fs=(i=0, i=42)   => fs=(i=0, i=42),
+            t=(i=1, i=2)     => t=(i=1, i=2, i=3),
+            t=()             => l=[
+                l=[i=1, i=2, i=3],
+                ss=(i=0, i=42),
+                d={}
+            ]
+        })
     }
 
     #[test]
@@ -144,7 +238,6 @@ mod value_tests {
         let comparison = get_test_object();
 
         for &(major, proto) in TEST_CASES {
-            println!("testing: py{} proto{}", major, proto);
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
             let unpickled = value_from_reader(file).unwrap();
             assert_eq!(unpickled, comparison);
@@ -191,7 +284,7 @@ mod value_tests {
             assert_eq!(original, tripped);
         }
         QuickCheck::new().gen(StdGen::new(thread_rng(), 10))
-                         .tests(10000)
+                         .tests(5000)
                          .quickcheck(roundtrip as fn(_));
     }
 
