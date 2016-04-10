@@ -167,7 +167,7 @@ impl<Iter> Deserializer<Iter>
                 LONG_BINPUT => {
                     let bytes = try!(self.read_bytes(4));
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    try!(self.memoize(memo_id));
+                    try!(self.memoize(memo_id as MemoId));
                 }
                 MEMOIZE => {
                     let memo_id = self.memo.len();
@@ -190,7 +190,7 @@ impl<Iter> Deserializer<Iter>
                 LONG_BINGET => {
                     let bytes = try!(self.read_bytes(4));
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    self.push_memo_ref(memo_id);
+                    self.push_memo_ref(memo_id as MemoId);
                 }
 
                 // Singletons
@@ -500,11 +500,12 @@ impl<Iter> Deserializer<Iter>
 
     fn top(&mut self) -> Result<&mut Value> {
         match self.stack.last_mut() {
-            None => return Err(Error::Eval(ErrorCode::StackUnderflow, self.rdr.pos)),
+            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.rdr.pos())),
             // Since some operations like APPEND do things to the stack top, we
             // need to provide the reference to the "real" object here, not the
             // MemoRef variant.
-            Some(&mut Value::MemoRef(n)) => Ok(self.memo.get_mut(&n).unwrap()),
+            Some(&mut Value::MemoRef(n)) =>
+                self.memo.get_mut(&n).ok_or(Error::Syntax(ErrorCode::MissingMemo(n))),
             Some(other_value) => Ok(other_value)
         }
     }

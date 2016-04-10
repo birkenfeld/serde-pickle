@@ -9,7 +9,10 @@
 # Run this with both Python 2.x and 3.x to generate all test files.
 
 import sys
-import pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 
 longish = 10000000000 * 10000000000  # > 64 bits
 
@@ -39,8 +42,13 @@ for proto in range(max_proto + 1):
     with open('tests_py%d_proto%d.pickle' % (major, proto), 'wb') as fp:
         pickle.dump(test_object, fp, proto)
 
+# Do all else with Python 3 only.
+if major == 2:
+    sys.exit()
+
 # Generate recursive structure.
-my_list = []
-my_list.append(([my_list], ))
-with open('test_recursive.pickle', 'wb') as fp:
-    pickle.dump()
+rec_list = []
+rec_list.append(([rec_list], ))
+for proto in range(max_proto + 1):
+    with open('test_recursive_proto%d.pickle' % proto, 'wb') as fp:
+        pickle.dump(rec_list, fp, proto)

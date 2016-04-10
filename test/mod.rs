@@ -11,6 +11,7 @@ mod value_tests {
     use num_bigint::BigInt;
     use {value_from_reader, value_to_vec, value_from_slice};
     use {Value, HashableValue};
+    use error::{Error, ErrorCode};
 
     // combinations of (python major, pickle proto) to test
     const TEST_CASES: &'static [(u32, u32)] = &[
@@ -61,5 +62,16 @@ mod value_tests {
         let vec: Vec<_> = value_to_vec(&dict, true).unwrap();
         let tripped = value_from_slice(&vec).unwrap();
         assert_eq!(dict, tripped);
+    }
+
+    #[test]
+    fn recursive() {
+        for proto in &[0, 1, 2, 3, 4] {
+            let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
+            match value_from_reader(file) {
+                Err(Error::Syntax(ErrorCode::Recursive)) => { }
+                _ => assert!(false, "wrong/no error returned for recursive structure")
+            }
+        }
     }
 }

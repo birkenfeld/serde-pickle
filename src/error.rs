@@ -35,6 +35,8 @@ pub enum ErrorCode {
     UnresolvedGlobal,
     /// A "module global" isn't supported
     UnsupportedGlobal(Vec<u8>, Vec<u8>),
+    /// A value was missing from the memo
+    MissingMemo(u32),
     /// Invalid literal found
     InvalidLiteral(Vec<u8>),
     /// Found trailing bytes after STOP opcode
@@ -71,6 +73,7 @@ impl fmt::Display for ErrorCode {
             ErrorCode::UnsupportedGlobal(ref m, ref g) =>
                 write!(fmt, "unsupported global: {}.{}",
                        String::from_utf8_lossy(m), String::from_utf8_lossy(g)),
+            ErrorCode::MissingMemo(n) => write!(fmt, "missing memo with id {}", n),
             ErrorCode::InvalidLiteral(ref l) =>
                 write!(fmt, "literal is invalid: {}", String::from_utf8_lossy(l)),
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),
