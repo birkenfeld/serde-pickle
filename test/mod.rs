@@ -4,11 +4,14 @@
 // your option. This file may not be copied, modified, or distributed except
 // according to those terms.
 
+extern crate rand;
+
 mod value_tests {
     use std::fs::File;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter::FromIterator;
     use num_bigint::BigInt;
+    use super::rand::{Rng, thread_rng};
     use {value_from_reader, value_to_vec, value_from_slice};
     use {Value, HashableValue};
     use error::{Error, ErrorCode};
@@ -73,5 +76,55 @@ mod value_tests {
                 _ => assert!(false, "wrong/no error returned for recursive structure")
             }
         }
+    }
+
+    #[test]
+    fn fuzzing() {
+        // Tries to ensure that we don't panic when encountering strange streams.
+        for _ in 0..1000 {
+            let mut stream = [0u8; 1000];
+            thread_rng().fill_bytes(&mut stream);
+            if *stream.last().unwrap() == b'.' { continue; }
+            // These must all fail with an error, since we skip the check if the
+            // last byte is a STOP opcode.
+            assert!(value_from_slice(&stream).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    extern crate test;
+
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use self::test::Bencher;
+    use value_from_slice;
+
+    #[bench]
+    fn unpickle_list(b: &mut Bencher) {
+        let mut buffer = b"\x80\x02]q\x00(".to_vec();
+        for i in 0..1000 {
+            buffer.extend(b"]r");
+            buffer.write_u32::<LittleEndian>(i + 1).unwrap();
+            buffer.push(b'M');
+            buffer.write_u16::<LittleEndian>(i as u16).unwrap();
+            buffer.push(b'a');
+        }
+        buffer.extend(b"e.");
+        b.iter(|| value_from_slice(&buffer));
+    }
+
+    #[bench]
+    fn unpickle_nested_list(b: &mut Bencher) {
+        let mut buffer = b"\x80\x02".to_vec();
+        for i in 0..1000 {
+            buffer.extend(b"]r");
+            buffer.write_u32::<LittleEndian>(i).unwrap();
+        }
+        for _ in 0..1000 {
+            buffer.push(b'a');
+        }
+        buffer.push(b'.');
+        b.iter(|| value_from_slice(&buffer));
     }
 }

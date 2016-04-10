@@ -529,8 +529,8 @@ impl<Iter> Deserializer<Iter>
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
-            println!("WARN: putting memo ref on memo");
-            item = self.memo[&id].clone();
+            item = try!(self.memo.get(&id).ok_or(
+                Error::Eval(ErrorCode::MissingMemo(id), self.rdr.pos()))).clone();
         }
         self.memo.insert(memo_id, item);
         self.push_memo_ref(memo_id);

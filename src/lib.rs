@@ -37,8 +37,7 @@
 //! handle).  These functions, called `value_from_*` and `value_to_*`, will
 //! correctly (un)pickle these types.
 
-#![feature(alloc_system)]
-extern crate alloc_system;
+#![cfg_attr(test, feature(test))]
 
 extern crate serde;
 extern crate num_bigint;
