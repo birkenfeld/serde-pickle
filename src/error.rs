@@ -1,4 +1,10 @@
-//! Error codes
+// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
+// or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
+// your option. This file may not be copied, modified, or distributed except
+// according to those terms.
+
+//! Error objects and codes
 
 use std::fmt;
 use std::io;
@@ -23,6 +29,12 @@ pub enum ErrorCode {
     InvalidStackTop,
     /// Value not hashable, but used as dict key or set item
     ValueNotHashable,
+    /// Recursive structure found, which we don't support
+    Recursive,
+    /// A "module global" reference wasn't resolved by REDUCE
+    UnresolvedGlobal,
+    /// A "module global" isn't supported
+    UnsupportedGlobal(String, String),
     /// Invalid literal found
     InvalidLiteral(Vec<u8>),
     /// Found trailing bytes after STOP opcode
@@ -53,6 +65,10 @@ impl fmt::Display for ErrorCode {
             ErrorCode::StringNotUTF8 => write!(fmt, "string is not UTF8 encoded"),
             ErrorCode::InvalidStackTop => write!(fmt, "invalid type of top of stack"),
             ErrorCode::ValueNotHashable => write!(fmt, "dict key or set item not hashable"),
+            ErrorCode::Recursive => write!(fmt, "recursive structure found"),
+            ErrorCode::UnresolvedGlobal => write!(fmt, "unresolved global reference"),
+            ErrorCode::UnsupportedGlobal(ref m, ref g) => write!(fmt, "unsupported global: \
+                                                                       {}.{}", m, g),
             ErrorCode::InvalidLiteral(ref l) => write!(fmt, "literal is invalid: {}",
                                                        String::from_utf8_lossy(&l)),
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),

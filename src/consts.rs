@@ -1,9 +1,14 @@
+// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
+// or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
+// your option. This file may not be copied, modified, or distributed except
+// according to those terms.
+
 //! Constants for pickle opcodes.
 //!
-//! These are the names Python's pickle.py uses.  They are not in an enum
-//! because it's not very useful to make it one.
+//! These constants use the names Python's pickle.py uses.  They are not in an
+//! enum because it's not very useful to make it one.
 
-// Should be supported.
 pub const MARK             : u8 = b'(';    // push special markobject on stack
 pub const STOP             : u8 = b'.';    // every pickle ends with STOP
 pub const POP              : u8 = b'0';    // discard topmost stack item
@@ -35,6 +40,9 @@ pub const BINFLOAT         : u8 = b'G';    // push float; arg is 8-byte float en
 pub const PUT              : u8 = b'p';    // store stack top in memo; index is string arg
 pub const BINPUT           : u8 = b'q';    //   "     "    "   "   " ;   "    " 1-byte arg
 pub const LONG_BINPUT      : u8 = b'r';    //   "     "    "   "   " ;   "    " 4-byte arg
+pub const GET              : u8 = b'g';    // push item from memo on stack; index is string arg
+pub const BINGET           : u8 = b'h';    //   "    "    "    "   "   "  ;   "    " 1-byte arg
+pub const LONG_BINGET      : u8 = b'j';    // push item from memo on stack; index is 4-byte arg
 pub const GLOBAL           : u8 = b'c';    // push self.find_class(modname, name); 2 string args
 pub const STACK_GLOBAL     : u8 = b'\x93'; // same as GLOBAL but using names on the stacks
 pub const REDUCE           : u8 = b'R';    // apply callable to argtuple, both on stack
@@ -57,15 +65,11 @@ pub const FROZENSET        : u8 = b'\x91'; // build frozenset from topmost stack
 pub const MEMOIZE          : u8 = b'\x94'; // store top of the stack in memo
 pub const FRAME            : u8 = b'\x95'; // indicate the beginning of a new frame
 
-// Currently unsupported.
+// Ops only used for classes and recursive objects; these are unsupported.
 // pub const PERSID           : u8 = b'P';    // push persistent object; id is taken from string arg
 // pub const BINPERSID        : u8 = b'Q';    //  "       "         "  ;  "  "   "     "  stack
-// pub const REDUCE           : u8 = b'R';    // apply callable to argtuple, both on stack
 // pub const BUILD            : u8 = b'b';    // call __setstate__ or __dict__.update()
-// pub const GET              : u8 = b'g';    // push item from memo on stack; index is string arg
-// pub const BINGET           : u8 = b'h';    //   "    "    "    "   "   "  ;   "    " 1-byte arg
 // pub const INST             : u8 = b'i';    // build & push class instance
-// pub const LONG_BINGET      : u8 = b'j';    // push item from memo on stack; index is 4-byte arg
 // pub const OBJ              : u8 = b'o';    // build & push class instance
 // pub const NEWOBJ           : u8 = b'\x81'; // build object by applying cls.__new__ to argtuple
 // pub const EXT1             : u8 = b'\x82'; // push object from extension registry; 1-byte index

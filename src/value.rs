@@ -1,4 +1,10 @@
-//! Python values
+// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
+// or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
+// your option. This file may not be copied, modified, or distributed except
+// according to those terms.
+
+//! Python values, and serialization instances for them.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,15 +14,15 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 use serde::{ser, de};
 
-use error::Error;
+use error::{Error, ErrorCode};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// None
     None,
     /// Boolean
     Bool(bool),
-    /// Normal-sized integer
+    /// Short integer
     I64(i64),
     /// Big integer
     Int(BigInt),
@@ -61,18 +67,18 @@ pub enum HashableValue {
 }
 
 impl Value {
-    pub fn to_hashable(self) -> Option<HashableValue> {
+    pub fn to_hashable(self) -> Result<HashableValue, Error> {
         match self {
-            Value::None         => Some(HashableValue::None),
-            Value::Bool(b)      => Some(HashableValue::Bool(b)),
-            Value::I64(i)       => Some(HashableValue::I64(i)),
-            Value::Int(i)       => Some(HashableValue::Int(i)),
-            Value::F64(f)       => Some(HashableValue::F64(f)),
-            Value::Bytes(b)     => Some(HashableValue::Bytes(b)),
-            Value::String(s)    => Some(HashableValue::String(s)),
-            Value::FrozenSet(v) => Some(HashableValue::FrozenSet(v)),
+            Value::None         => Ok(HashableValue::None),
+            Value::Bool(b)      => Ok(HashableValue::Bool(b)),
+            Value::I64(i)       => Ok(HashableValue::I64(i)),
+            Value::Int(i)       => Ok(HashableValue::Int(i)),
+            Value::F64(f)       => Ok(HashableValue::F64(f)),
+            Value::Bytes(b)     => Ok(HashableValue::Bytes(b)),
+            Value::String(s)    => Ok(HashableValue::String(s)),
+            Value::FrozenSet(v) => Ok(HashableValue::FrozenSet(v)),
             Value::Tuple(v)     => values_to_hashable(v).map(HashableValue::Tuple),
-            _                   => None
+            _                   => Err(Error::Syntax(ErrorCode::ValueNotHashable))
         }
     }
 }
@@ -93,11 +99,18 @@ impl HashableValue {
     }
 }
 
-fn values_to_hashable(values: Box<[Value]>) -> Option<Box<[HashableValue]>> {
+// fn make_hashable(value: Value, pos: usize) -> Result<HashableValue> {
+//     match value.to_hashable() {
+//         Some(v) => Ok(v),
+//         None    => Err(Error::Eval(ErrorCode::ValueNotHashable, pos))
+//     }
+// }
+
+fn values_to_hashable(values: Box<[Value]>) -> Result<Box<[HashableValue]>, Error> {
     values.into_vec()
           .into_iter()
           .map(Value::to_hashable)
-          .collect::<Option<Vec<_>>>()
+          .collect::<Result<Vec<_>, _>>()
           .map(Vec::into_boxed_slice)
 }
 
@@ -689,10 +702,7 @@ impl ser::Serializer for Serializer {
         let mut iter = ser.values.into_iter();
         while let Some(key) = iter.next() {
             let value = iter.next().unwrap();
-            let key = match key.to_hashable() {
-                Some(v) => v,
-                None => return Err(ser::Error::custom("Map key not valid in Python dict")),
-            };
+            let key = try!(key.to_hashable());
             map.insert(key, value);
         }
         self.values.push(Value::Dict(map));

@@ -1,3 +1,9 @@
+// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
+// or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
+// your option. This file may not be copied, modified, or distributed except
+// according to those terms.
+
 //! Pickle serialization
 
 use std::io;
@@ -463,7 +469,7 @@ pub fn to_writer<W: io::Write, T: ser::Serialize>(writer: &mut W, value: &T, use
 
 /// Encode the value into a `Vec<u8>` buffer.
 #[inline]
-pub fn value_to_vec<T: ser::Serialize>(value: &Value, use_proto_3: bool) -> Result<Vec<u8>> {
+pub fn value_to_vec(value: &Value, use_proto_3: bool) -> Result<Vec<u8>> {
     let mut writer = Vec::with_capacity(128);
     try!(value_to_writer(&mut writer, value, use_proto_3));
     Ok(writer)

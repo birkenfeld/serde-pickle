@@ -1,32 +1,65 @@
+// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
+// or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
+// your option. This file may not be copied, modified, or distributed except
+// according to those terms.
+
 //! # Pickle deserialization
 //!
-//! Note: Pickles are not a declarative format, but a program for a stack-based
-//! VM.  Each value that is decoded is simply put on the stack, and some
-//! operations pop items from the stack and construct new data with them.
-//!
-//! This means that we cannot decode pickles directly with the serde visitor,
-//! since we don't know e.g. when a map starts.  Instead, we have to interpret
-//! the pickle into an intermediate representation of Python objects (i.e.
-//! `value::Value`) and can then deserialize this into other serde-supported
-//! data types.
-//!
-//! In turn, this means that using the generic `from_` functions with
-//! `value::Value` as the output type will construct Values, and then let
-//! serde de- and reconstruct them.  Don't do that, use the `value_from_`
-//! functions instead.
+//! Note: Serde's interface doesn't support all of Python's primitive types.  In
+//! order to deserialize a pickle stream to `value::Value`, use the
+//! `value_from_*` functions exported here, not the generic `from_*` functions.
 
 use std::io;
 use std::mem;
 use std::str;
 use std::char;
-use std::collections::{BTreeMap, BTreeSet};
+use std::vec;
+use std::collections::BTreeMap;
 use num_bigint::{BigInt, Sign};
+use num_traits::ToPrimitive;
 use byteorder::{ByteOrder, BigEndian, LittleEndian};
 use serde::de;
 
 use super::error::{Error, ErrorCode, Result};
 use super::consts::*;
-use super::value::{Value, HashableValue, from_value};
+use super::value;
+
+type MemoId = u32;
+
+#[derive(Clone, Debug, PartialEq)]
+enum Global {
+    Set,         // builtins/__builtin__.set
+    Frozenset,   // builtins/__builtin__.frozenset
+    Encode,      // _codecs.encode
+}
+
+/// Our intermediate representation of a value.
+///
+/// The most striking difference to `value::Value` is that it contains a variant
+/// for "MemoRef", which references values put into the "memo" map, and a variant
+/// for module globals that we support.
+///
+/// We also don't use sets and maps at the Rust level, since they are not
+/// needed: nothing is ever looked up in them at this stage, and Vecs are much
+/// tighter in memory.
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    MemoRef(MemoId),
+    Global(Global),
+    None,
+    Bool(bool),
+    I64(i64),
+    Int(BigInt),
+    F64(f64),
+    Bytes(Vec<u8>),
+    String(String),
+    List(Vec<Value>),
+    Tuple(Vec<Value>),
+    Set(Vec<Value>),
+    FrozenSet(Vec<Value>),
+    Dict(Vec<(Value, Value)>),
+}
 
 struct CharIter<Iter: Iterator<Item=io::Result<u8>>> {
     rdr: Iter,
@@ -52,22 +85,29 @@ impl<Iter: Iterator<Item=io::Result<u8>>> CharIter<Iter> {
     fn pos(&self) -> usize { self.pos }
 }
 
-/// Decodes pickle streams into Values.
-pub struct PickleReader<Iter: Iterator<Item=io::Result<u8>>> {
+/// Decodes pickle streams into values.
+pub struct Deserializer<Iter: Iterator<Item=io::Result<u8>>> {
     rdr: CharIter<Iter>,
     ch: Option<u8>,
+    value: Option<Value>,
+    memo: BTreeMap<MemoId, Value>,
     stack: Vec<Value>,
     stacks: Vec<Vec<Value>>,
     decode_strings: bool,
 }
 
-impl<Iter> PickleReader<Iter>
+// TODO: add a counter for how many memo references a key has, to avoid
+// a lot of unnecessary clones.
+
+impl<Iter> Deserializer<Iter>
     where Iter: Iterator<Item=io::Result<u8>>
 {
-    pub fn new(rdr: Iter, decode_strings: bool) -> PickleReader<Iter> {
-        PickleReader {
+    pub fn new(rdr: Iter, decode_strings: bool) -> Deserializer<Iter> {
+        Deserializer {
             rdr: CharIter::new(rdr),
             ch: None,
+            value: None,
+            memo: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
             decode_strings: decode_strings,
@@ -85,11 +125,23 @@ impl<Iter> PickleReader<Iter>
         }
     }
 
-    fn parse(&mut self) -> Result<Value> {
+    fn parse_value(&mut self) -> Result<Value> {
         loop {
             match try!(self.read_byte()) {
                 // Specials
+                PROTO => {
+                    // Ignore this, as it is only important for instances (read the version byte).
+                    try!(self.read_byte());
+                }
+                FRAME => {
+                    // We'll ignore framing. But we still have to gobble up the length.
+                    try!(self.read_bytes(8));
+                }
                 STOP => return self.pop(),
+                MARK => {
+                    let stack = mem::replace(&mut self.stack, Vec::with_capacity(128));
+                    self.stacks.push(stack);
+                }
                 POP => {
                     if self.stack.is_empty() {
                         try!(self.pop_mark());
@@ -99,24 +151,48 @@ impl<Iter> PickleReader<Iter>
                 },
                 POP_MARK => { try!(self.pop_mark()); },
                 DUP => { let top = try!(self.top()).clone(); self.stack.push(top); },
-                MARK => {
-                    let stack = mem::replace(&mut self.stack, Vec::with_capacity(128));
-                    self.stacks.push(stack);
+
+                // Memo saving ops
+                PUT => {
+                    let bytes = try!(self.read_line());
+                    let memo_id = match str::from_utf8(&bytes).unwrap_or("").parse() {
+                        Ok(v) => v,
+                        Err(_) => return self.error(ErrorCode::InvalidLiteral(bytes)),
+                    };
+                    try!(self.memoize(memo_id));
                 }
-                PROTO => {
-                    // Ignore this, as it is only important for instances (read the version byte).
-                    try!(self.read_byte());
+                BINPUT => {
+                    let memo_id = try!(self.read_byte());
+                    try!(self.memoize(memo_id as MemoId));
                 }
-                FRAME => {
-                    // We'll ignore framing for now. But we still have to gobble up the length.
-                    try!(self.read_bytes(8));
+                LONG_BINPUT => {
+                    let bytes = try!(self.read_bytes(4));
+                    let memo_id = LittleEndian::read_u32(&bytes);
+                    try!(self.memoize(memo_id));
+                }
+                MEMOIZE => {
+                    let memo_id = self.memo.len();
+                    try!(self.memoize(memo_id as MemoId));
                 }
 
-                // Memo ops: ignore (trying to get the memo will error out)
-                PUT => { try!(self.read_line()); },
-                BINPUT => { try!(self.read_byte()); },
-                LONG_BINPUT => { try!(self.read_bytes(4)); },
-                MEMOIZE => { },
+                // Memo getting ops
+                GET => {
+                    let bytes = try!(self.read_line());
+                    let memo_id = match str::from_utf8(&bytes).unwrap_or("").parse() {
+                        Ok(v) => v,
+                        Err(_) => return self.error(ErrorCode::InvalidLiteral(bytes)),
+                    };
+                    self.stack.push(Value::MemoRef(memo_id));
+                }
+                BINGET => {
+                    let memo_id = try!(self.read_byte());
+                    self.stack.push(Value::MemoRef(memo_id as MemoId));
+                }
+                LONG_BINGET => {
+                    let bytes = try!(self.read_bytes(4));
+                    let memo_id = LittleEndian::read_u32(&bytes);
+                    self.stack.push(Value::MemoRef(memo_id));
+                }
 
                 // Singletons
                 NONE => self.stack.push(Value::None),
@@ -242,25 +318,25 @@ impl<Iter> PickleReader<Iter>
                 }
 
                 // Containers
-                EMPTY_TUPLE => self.stack.push(Value::Tuple(Box::new([]))),
+                EMPTY_TUPLE => self.stack.push(Value::Tuple(Vec::new())),
                 TUPLE1 => {
                     let item = try!(self.pop());
-                    self.stack.push(Value::Tuple(Box::new([item])));
+                    self.stack.push(Value::Tuple(vec![item]));
                 }
                 TUPLE2 => {
                     let item2 = try!(self.pop());
                     let item1 = try!(self.pop());
-                    self.stack.push(Value::Tuple(Box::new([item1, item2])));
+                    self.stack.push(Value::Tuple(vec![item1, item2]));
                 }
                 TUPLE3 => {
                     let item3 = try!(self.pop());
                     let item2 = try!(self.pop());
                     let item1 = try!(self.pop());
-                    self.stack.push(Value::Tuple(Box::new([item1, item2, item3])));
+                    self.stack.push(Value::Tuple(vec![item1, item2, item3]));
                 }
                 TUPLE => {
                     let items = try!(self.pop_mark());
-                    self.stack.push(Value::Tuple(items.into_boxed_slice()));
+                    self.stack.push(Value::Tuple(items));
                 }
                 EMPTY_LIST => self.stack.push(Value::List(vec![])),
                 LIST => {
@@ -287,16 +363,15 @@ impl<Iter> PickleReader<Iter>
                         return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
                     }
                 }
-                EMPTY_DICT => self.stack.push(Value::Dict(BTreeMap::new())),
+                EMPTY_DICT => self.stack.push(Value::Dict(Vec::new())),
                 DICT => {
-                    let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
-                    let mut dict = BTreeMap::new();
+                    let mut dict = Vec::with_capacity(items.len() / 2);
                     let mut key = None;
                     for value in items {
                         match key.take() {
                             None      => key = Some(value),
-                            Some(key) => { dict.insert(try!(make_hashable(key, pos)), value); }
+                            Some(key) => { dict.push((key, value)); }
                         }
                     }
                     self.stack.push(Value::Dict(dict));
@@ -307,7 +382,7 @@ impl<Iter> PickleReader<Iter>
                     let key = try!(self.pop());
                     let top = try!(self.top());
                     if let &mut Value::Dict(ref mut dict) = top {
-                        dict.insert(try!(make_hashable(key, pos)), value);
+                        dict.push((key, value));
                     } else {
                         return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
                     }
@@ -321,31 +396,24 @@ impl<Iter> PickleReader<Iter>
                         for value in items {
                             match key.take() {
                                 None      => key = Some(value),
-                                Some(key) => { dict.insert(try!(make_hashable(key, pos)), value); }
+                                Some(key) => { dict.push((key, value)); }
                             }
                         }
                     } else {
                         return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
                     }
                 }
-                EMPTY_SET => self.stack.push(Value::Set(BTreeSet::new())),
+                EMPTY_SET => self.stack.push(Value::Set(Vec::new())),
                 FROZENSET => {
-                    let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
-                    let mut set = BTreeSet::new();
-                    for item in items {
-                        set.insert(try!(make_hashable(item, pos)));
-                    }
-                    self.stack.push(Value::FrozenSet(set));
+                    self.stack.push(Value::FrozenSet(items));
                 }
                 ADDITEMS => {
                     let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
                     let top = try!(self.top());
                     if let &mut Value::Set(ref mut set) = top {
-                        for item in items {
-                            set.insert(try!(make_hashable(item, pos)));
-                        }
+                        set.extend(items);
                     } else {
                         return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
                     }
@@ -369,51 +437,38 @@ impl<Iter> PickleReader<Iter>
                     try!(self.handle_global(modname, globname));
                 }
                 REDUCE => {
-                    let mut argtuple = match try!(self.pop()) {
-                        Value::Tuple(args) => args.into_vec(),
+                    let mut argtuple = match try!(self.pop_resolve()) {
+                        Value::Tuple(args) => args,
                         _ => return self.error(ErrorCode::InvalidStackTop),
                     };
-                    let callable = try!(self.pop());  // actually an object we construct
-                    match callable {
-                        Value::Set(mut set) => {
-                            match argtuple.pop() {
-                                Some(Value::List(items)) => {
-                                    let pos = self.rdr.pos();
-                                    for item in items {
-                                        set.insert(try!(make_hashable(item, pos)));
-                                    }
-                                    self.stack.push(Value::Set(set));
-                                }
+                    let global = try!(self.pop_resolve());
+                    match global {
+                        Value::Global(Global::Set) => {
+                            match self.resolve(argtuple.pop()) {
+                                Some(Value::List(items)) =>
+                                    self.stack.push(Value::Set(items)),
                                 _ => return self.error(ErrorCode::InvalidStackTop),
                             }
                         }
-                        Value::FrozenSet(mut set) => {
-                            match argtuple.pop() {
-                                Some(Value::List(items)) => {
-                                    let pos = self.rdr.pos();
-                                    for item in items {
-                                        set.insert(try!(make_hashable(item, pos)));
-                                    }
-                                    self.stack.push(Value::FrozenSet(set));
-                                }
+                        Value::Global(Global::Frozenset) => {
+                            match self.resolve(argtuple.pop()) {
+                                Some(Value::List(items)) =>
+                                    self.stack.push(Value::FrozenSet(items)),
                                 _ => return self.error(ErrorCode::InvalidStackTop),
                             }
                         }
-                        Value::Bytes(mut bytes) => {
+                        Value::Global(Global::Encode) => {
                             // Byte object encoded as _codecs.encode(x, 'latin1')
-                            println!("{:?}", argtuple);
-                            match argtuple.pop() {  // Encoding, always latin1
+                            match self.resolve(argtuple.pop()) {  // Encoding, always latin1
                                 Some(Value::String(_)) => { }
                                 _ => return self.error(ErrorCode::InvalidStackTop),
                             }
-                            match argtuple.pop() {
+                            match self.resolve(argtuple.pop()) {
                                 Some(Value::String(s)) => {
                                     // Now we have to convert the string to latin-1
                                     // encoded bytes.  It never contains codepoints
                                     // above 0xff.
-                                    for ch in s.chars() {
-                                        bytes.push(ch as u8);
-                                    }
+                                    let bytes = s.chars().map(|ch| ch as u8).collect();
                                     self.stack.push(Value::Bytes(bytes));
                                 }
                                 _ => return self.error(ErrorCode::InvalidStackTop),
@@ -436,17 +491,50 @@ impl<Iter> PickleReader<Iter>
         }
     }
 
-    fn top(&mut self) -> Result<&mut Value> {
-        if self.stack.is_empty() {
-            return self.error(ErrorCode::StackUnderflow);
+    fn pop_resolve(&mut self) -> Result<Value> {
+        match self.stack.pop() {
+            Some(Value::MemoRef(n)) => Ok(self.memo[&n].clone()),
+            Some(v) => Ok(v),
+            None    => self.error(ErrorCode::StackUnderflow)
         }
-        return Ok(self.stack.last_mut().unwrap());
+    }
+
+    fn top(&mut self) -> Result<&mut Value> {
+        match self.stack.last_mut() {
+            None => return Err(Error::Eval(ErrorCode::StackUnderflow, self.rdr.pos)),
+            // Since some operations like APPEND do things to the stack top, we
+            // need to provide the reference to the "real" object here, not the
+            // MemoRef variant.
+            Some(&mut Value::MemoRef(n)) => Ok(self.memo.get_mut(&n).unwrap()),
+            Some(other_value) => Ok(other_value)
+        }
     }
 
     fn pop_mark(&mut self) -> Result<Vec<Value>> {
         match self.stacks.pop() {
             Some(new) => Ok(mem::replace(&mut self.stack, new)),
             None      => self.error(ErrorCode::StackUnderflow)
+        }
+    }
+
+    fn memoize(&mut self, memo_id: MemoId) -> Result<()> {
+        // Move the actual object into the memo, and save a reference on the
+        // stack instead.
+        let mut item = try!(self.pop());
+        if let Value::MemoRef(id) = item {
+            // TODO!
+            item = Value::MemoRef(id);
+        }
+        self.memo.insert(memo_id, item);
+        self.stack.push(Value::MemoRef(memo_id));
+        Ok(())
+    }
+
+    fn resolve(&self, maybe_memo: Option<Value>) -> Option<Value> {
+        match maybe_memo {
+            None => None,
+            Some(Value::MemoRef(n)) => self.memo.get(&n).map(Clone::clone),
+            some_other => some_other
         }
     }
 
@@ -597,13 +685,15 @@ impl<Iter> PickleReader<Iter>
 
     fn handle_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<()> {
         match (&*modname, &*globname) {
-            (b"__builtin__", b"set") =>
-                self.stack.push(Value::Set(BTreeSet::new())),
-            (b"__builtin__", b"frozenset") =>
-                self.stack.push(Value::FrozenSet(BTreeSet::new())),
-            (b"_codecs", b"encode") =>
-                self.stack.push(Value::Bytes(Vec::new())),
-            _ => return self.error(ErrorCode::Unsupported(GLOBAL as char))
+            (b"__builtin__", b"set") => self.stack.push(Value::Global(Global::Set)),
+            (b"builtins", b"set") => self.stack.push(Value::Global(Global::Set)),
+            (b"__builtin__", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
+            (b"builtins", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
+            (b"_codecs", b"encode") => self.stack.push(Value::Global(Global::Encode)),
+            _ => return self.error(ErrorCode::UnsupportedGlobal(
+                String::from_utf8_lossy(&modname).into_owned(),
+                String::from_utf8_lossy(&globname).into_owned(),
+            ))
         }
         Ok(())
     }
@@ -611,60 +701,277 @@ impl<Iter> PickleReader<Iter>
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
         Err(Error::Eval(reason, self.rdr.pos()))
     }
-}
 
-fn make_hashable(value: Value, pos: usize) -> Result<HashableValue> {
-    match value.to_hashable() {
-        Some(v) => Ok(v),
-        None    => Err(Error::Eval(ErrorCode::ValueNotHashable, pos))
+    fn deserialize_value(&mut self, value: Value) -> Result<value::Value> {
+        match value {
+            Value::None => Ok(value::Value::None),
+            Value::Bool(v) => Ok(value::Value::Bool(v)),
+            Value::I64(v) => Ok(value::Value::I64(v)),
+            Value::Int(v) => {
+                if let Some(i) = v.to_i64() {
+                    Ok((value::Value::I64(i)))
+                } else {
+                    Ok((value::Value::Int(v)))
+                }
+            },
+            Value::F64(v) => Ok(value::Value::F64(v)),
+            Value::Bytes(v) => Ok(value::Value::Bytes(v)),
+            Value::String(v) => Ok(value::Value::String(v)),
+            Value::List(v) => {
+                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
+                Ok(value::Value::List(new_list))
+            },
+            Value::Tuple(v) => {
+                let new_list: Vec<_> = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
+                Ok(value::Value::Tuple(new_list.into_boxed_slice()))
+            },
+            Value::Set(v) => {
+                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
+                                                      .and_then(|rv| rv.to_hashable())).collect());
+                Ok(value::Value::Set(new_list))
+            },
+            Value::FrozenSet(v) => {
+                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
+                                                      .and_then(|rv| rv.to_hashable())).collect());
+                Ok(value::Value::FrozenSet(new_list))
+            },
+            Value::Dict(v) => {
+                let mut map = BTreeMap::new();
+                for (key, value) in v {
+                    let real_key = try!(self.deserialize_value(key).and_then(|rv| rv.to_hashable()));
+                    let real_value = try!(self.deserialize_value(value));
+                    map.insert(real_key, real_value);
+                }
+                Ok(value::Value::Dict(map))
+            },
+            Value::MemoRef(memo_id) => {
+                // Take the value from the memo while visiting it.  This prevents
+                // us from trying to depickle recursive structures, which we can't
+                // do because our Values aren't references.
+                let value = match self.memo.remove(&memo_id) {
+                    Some(value) => value,
+                    None => return Err(Error::Syntax(ErrorCode::Recursive)),
+                };
+                let real_value = try!(self.deserialize_value(value.clone()));
+                self.memo.insert(memo_id, value);
+                Ok(real_value)
+            },
+            Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
+        }
     }
 }
 
-/// Decodes a value directly from an iterator.
-pub fn value_from_iter<I>(iter: I) -> Result<Value>
-    where I: Iterator<Item=io::Result<u8>>
+impl<Iter> de::Deserializer for Deserializer<Iter>
+    where Iter: Iterator<Item=io::Result<u8>>
 {
-    let mut pr = PickleReader::new(iter, false);
-    let value = try!(pr.parse());
-    // Make sure the whole stream has been consumed.
-    try!(pr.end());
-    Ok(value)
+    type Error = Error;
+
+    fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value>
+        where V: de::Visitor
+    {
+        let value = match self.value.take() {
+            Some(v) => v,
+            None => try!(self.parse_value()),
+        };
+
+        match value {
+            Value::None => visitor.visit_unit(),
+            Value::Bool(v) => visitor.visit_bool(v),
+            Value::I64(v) => visitor.visit_i64(v),
+            Value::Int(v) => {
+                if let Some(i) = v.to_i64() {
+                    visitor.visit_i64(i)
+                } else {
+                    return Err(de::Error::invalid_value("integer too large"));
+                }
+            },
+            Value::F64(v) => visitor.visit_f64(v),
+            Value::Bytes(v) => visitor.visit_byte_buf(v),
+            Value::String(v) => visitor.visit_string(v),
+            Value::List(v) => {
+                let len = v.len();
+                visitor.visit_seq(SeqVisitor {
+                    de: self,
+                    iter: v.into_iter(),
+                    len: len,
+                })
+            },
+            Value::Tuple(v) => {
+                visitor.visit_seq(SeqVisitor {
+                    de: self,
+                    len: v.len(),
+                    iter: v.into_iter(),
+                })
+            }
+            Value::Set(v) | Value::FrozenSet(v) => {
+                visitor.visit_seq(SeqVisitor {
+                    de: self,
+                    len: v.len(),
+                    iter: v.into_iter(),
+                })
+            },
+            Value::Dict(v) => {
+                let len = v.len();
+                visitor.visit_map(MapVisitor {
+                    de: self,
+                    iter: v.into_iter(),
+                    value: None,
+                    len: len,
+                })
+            },
+            Value::MemoRef(memo_id) => {
+                // Take the value from the memo while visiting it.  This prevents
+                // us from trying to depickle recursive structures, which we can't
+                // do because our Values aren't references.
+                let value = match self.memo.remove(&memo_id) {
+                    Some(value) => value,
+                    None => return Err(Error::Syntax(ErrorCode::Recursive)),
+                };
+                self.value = Some(value.clone());
+                let real_value = try!(de::Deserialize::deserialize(self));
+                self.memo.insert(memo_id, value);
+                Ok(real_value)
+            },
+            Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
+        }
+    }
 }
 
-/// Decodes a value from a `std::io::Read`.
-pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<Value> {
-    value_from_iter(rdr.bytes())
+struct SeqVisitor<'a, Iter>
+    where Iter: Iterator<Item=io::Result<u8>> + 'a
+{
+    de: &'a mut Deserializer<Iter>,
+    iter: vec::IntoIter<Value>,
+    len: usize,
 }
 
-/// Decodes a value from a byte slice `&[u8]`.
-pub fn value_from_slice(v: &[u8]) -> Result<Value> {
-    value_from_iter(v.iter().map(|byte| Ok(*byte)))
+impl<'a, Iter> de::SeqVisitor for SeqVisitor<'a, Iter>
+    where Iter: Iterator<Item=io::Result<u8>> + 'a
+{
+    type Error = Error;
+
+    fn visit<T>(&mut self) -> Result<Option<T>>
+        where T: de::Deserialize
+    {
+        match self.iter.next() {
+            Some(value) => {
+                self.len -= 1;
+                self.de.value = Some(value);
+                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn end(&mut self) -> Result<()> {
+        if self.len == 0 {
+            Ok(())
+        } else {
+            Err(de::Error::invalid_length(self.len))
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
 }
 
-/// Decodes a json value from a `&str`.
-pub fn value_from_str(s: &str) -> Result<Value> {
-    value_from_slice(s.as_bytes())
+struct MapVisitor<'a, Iter>
+    where Iter: Iterator<Item=io::Result<u8>> + 'a
+{
+    de: &'a mut Deserializer<Iter>,
+    iter: vec::IntoIter<(Value, Value)>,
+    value: Option<Value>,
+    len: usize,
 }
+
+impl<'a, Iter> de::MapVisitor for MapVisitor<'a, Iter>
+    where Iter: Iterator<Item=io::Result<u8>> + 'a
+{
+    type Error = Error;
+
+    fn visit_key<T>(&mut self) -> Result<Option<T>>
+        where T: de::Deserialize
+    {
+        match self.iter.next() {
+            Some((key, value)) => {
+                self.len -= 1;
+                self.value = Some(value);
+                self.de.value = Some(key);
+                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn visit_value<T>(&mut self) -> Result<T>
+        where T: de::Deserialize
+    {
+        let value = self.value.take().unwrap();
+        self.de.value = Some(value);
+        Ok(try!(de::Deserialize::deserialize(self.de)))
+    }
+
+    fn end(&mut self) -> Result<()> {
+        if self.len == 0 {
+            Ok(())
+        } else {
+            Err(de::Error::invalid_length(self.len))
+        }
+    }
+
+    fn missing_field<V>(&mut self, field: &'static str) -> Result<V>
+        where V: de::Deserialize,
+    {
+        Err(de::Error::missing_field(field))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
 
 /// Decodes a value directly from an iterator.
 pub fn from_iter<I, T>(iter: I) -> Result<T>
     where I: Iterator<Item=io::Result<u8>>,
           T: de::Deserialize
 {
-    from_value(try!(value_from_iter(iter)))
+    let mut de = Deserializer::new(iter, false);
+    let value = try!(de::Deserialize::deserialize(&mut de));
+    // Make sure the whole stream has been consumed.
+    try!(de.end());
+    Ok(value)
 }
 
 /// Decodes a value from a `std::io::Read`.
 pub fn from_reader<R: io::Read, T: de::Deserialize>(rdr: R) -> Result<T> {
-    from_value(try!(value_from_reader(rdr)))
+    from_iter(rdr.bytes())
 }
 
 /// Decodes a value from a byte slice `&[u8]`.
 pub fn from_slice<T: de::Deserialize>(v: &[u8]) -> Result<T> {
-    from_value(try!(value_from_slice(v)))
+    from_iter(v.iter().map(|byte| Ok(*byte)))
 }
 
-/// Decodes a json value from a `&str`.
-pub fn from_str<T: de::Deserialize>(s: &str) -> Result<T> {
-    from_value(try!(value_from_str(s)))
+/// Decodes a value directly from an iterator.
+pub fn value_from_iter<I>(iter: I) -> Result<value::Value>
+    where I: Iterator<Item=io::Result<u8>>
+{
+    let mut de = Deserializer::new(iter, false);
+    let intermediate_value = try!(de.parse_value());
+    let value = try!(de.deserialize_value(intermediate_value));
+    // Make sure the whole stream has been consumed.
+    try!(de.end());
+    Ok(value)
+}
+
+/// Decodes a value from a `std::io::Read`.
+pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
+    value_from_iter(rdr.bytes())
+}
+
+/// Decodes a value from a byte slice `&[u8]`.
+pub fn value_from_slice(v: &[u8]) -> Result<value::Value> {
+    value_from_iter(v.iter().map(|byte| Ok(*byte)))
 }
