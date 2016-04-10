@@ -26,7 +26,7 @@ pub enum ErrorCode {
     /// String decoding as UTF-8 failed
     StringNotUTF8,
     /// Wrong stack top type for opcode
-    InvalidStackTop,
+    InvalidStackTop(&'static str, String),
     /// Value not hashable, but used as dict key or set item
     ValueNotHashable,
     /// Recursive structure found, which we don't support
@@ -34,7 +34,7 @@ pub enum ErrorCode {
     /// A "module global" reference wasn't resolved by REDUCE
     UnresolvedGlobal,
     /// A "module global" isn't supported
-    UnsupportedGlobal(String, String),
+    UnsupportedGlobal(Vec<u8>, Vec<u8>),
     /// Invalid literal found
     InvalidLiteral(Vec<u8>),
     /// Found trailing bytes after STOP opcode
@@ -62,15 +62,17 @@ impl fmt::Display for ErrorCode {
             ErrorCode::EOFWhileParsing => write!(fmt, "EOF while parsing"),
             ErrorCode::StackUnderflow => write!(fmt, "pickle stack underflow"),
             ErrorCode::NegativeLength => write!(fmt, "negative length prefix"),
-            ErrorCode::StringNotUTF8 => write!(fmt, "string is not UTF8 encoded"),
-            ErrorCode::InvalidStackTop => write!(fmt, "invalid type of top of stack"),
+            ErrorCode::StringNotUTF8 => write!(fmt, "string is not UTF-8 encoded"),
+            ErrorCode::InvalidStackTop(what, ref it) =>
+                write!(fmt, "invalid stack top, expected {}, got {}", what, it),
             ErrorCode::ValueNotHashable => write!(fmt, "dict key or set item not hashable"),
             ErrorCode::Recursive => write!(fmt, "recursive structure found"),
             ErrorCode::UnresolvedGlobal => write!(fmt, "unresolved global reference"),
-            ErrorCode::UnsupportedGlobal(ref m, ref g) => write!(fmt, "unsupported global: \
-                                                                       {}.{}", m, g),
-            ErrorCode::InvalidLiteral(ref l) => write!(fmt, "literal is invalid: {}",
-                                                       String::from_utf8_lossy(&l)),
+            ErrorCode::UnsupportedGlobal(ref m, ref g) =>
+                write!(fmt, "unsupported global: {}.{}",
+                       String::from_utf8_lossy(m), String::from_utf8_lossy(g)),
+            ErrorCode::InvalidLiteral(ref l) =>
+                write!(fmt, "literal is invalid: {}", String::from_utf8_lossy(l)),
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),
             ErrorCode::InvalidType(ref t) => write!(fmt, "invalid type: {:?}", t),
             ErrorCode::InvalidValue(ref s) => write!(fmt, "invalid value: {}", s),

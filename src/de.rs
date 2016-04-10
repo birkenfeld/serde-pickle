@@ -350,7 +350,7 @@ impl<Iter> Deserializer<Iter>
                     if let &mut Value::List(ref mut list) = top {
                         list.push(value);
                     } else {
-                        return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
+                        return Self::stack_error("list", top, pos);
                     }
                 }
                 APPENDS => {
@@ -360,7 +360,7 @@ impl<Iter> Deserializer<Iter>
                     if let &mut Value::List(ref mut list) = top {
                         list.extend(items);
                     } else {
-                        return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
+                        return Self::stack_error("list", top, pos);
                     }
                 }
                 EMPTY_DICT => self.stack.push(Value::Dict(Vec::new())),
@@ -384,7 +384,7 @@ impl<Iter> Deserializer<Iter>
                     if let &mut Value::Dict(ref mut dict) = top {
                         dict.push((key, value));
                     } else {
-                        return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
+                        return Self::stack_error("dict", top, pos);
                     }
                 }
                 SETITEMS => {
@@ -400,7 +400,7 @@ impl<Iter> Deserializer<Iter>
                             }
                         }
                     } else {
-                        return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
+                        return Self::stack_error("dict", top, pos);
                     }
                 }
                 EMPTY_SET => self.stack.push(Value::Set(Vec::new())),
@@ -415,7 +415,7 @@ impl<Iter> Deserializer<Iter>
                     if let &mut Value::Set(ref mut set) = top {
                         set.extend(items);
                     } else {
-                        return Err(Error::Eval(ErrorCode::InvalidStackTop, pos));
+                        return Self::stack_error("set", top, pos);
                     }
                 }
 
@@ -428,18 +428,18 @@ impl<Iter> Deserializer<Iter>
                 STACK_GLOBAL => {
                     let globname = match try!(self.pop()) {
                         Value::String(string) => string.into_bytes(),
-                        _ => return self.error(ErrorCode::InvalidStackTop),
+                        other => return Self::stack_error("string", &other, self.rdr.pos()),
                     };
                     let modname = match try!(self.pop()) {
                         Value::String(string) => string.into_bytes(),
-                        _ => return self.error(ErrorCode::InvalidStackTop),
+                        other => return Self::stack_error("string", &other, self.rdr.pos()),
                     };
                     try!(self.handle_global(modname, globname));
                 }
                 REDUCE => {
                     let mut argtuple = match try!(self.pop_resolve()) {
                         Value::Tuple(args) => args,
-                        _ => return self.error(ErrorCode::InvalidStackTop),
+                        other => return Self::stack_error("tuple", &other, self.rdr.pos()),
                     };
                     let global = try!(self.pop_resolve());
                     match global {
@@ -447,21 +447,21 @@ impl<Iter> Deserializer<Iter>
                             match self.resolve(argtuple.pop()) {
                                 Some(Value::List(items)) =>
                                     self.stack.push(Value::Set(items)),
-                                _ => return self.error(ErrorCode::InvalidStackTop),
+                                _ => return self.error(ErrorCode::InvalidValue("set() arg".into())),
                             }
                         }
                         Value::Global(Global::Frozenset) => {
                             match self.resolve(argtuple.pop()) {
                                 Some(Value::List(items)) =>
                                     self.stack.push(Value::FrozenSet(items)),
-                                _ => return self.error(ErrorCode::InvalidStackTop),
+                                _ => return self.error(ErrorCode::InvalidValue("set() arg".into())),
                             }
                         }
                         Value::Global(Global::Encode) => {
                             // Byte object encoded as _codecs.encode(x, 'latin1')
                             match self.resolve(argtuple.pop()) {  // Encoding, always latin1
                                 Some(Value::String(_)) => { }
-                                _ => return self.error(ErrorCode::InvalidStackTop),
+                                _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
                             }
                             match self.resolve(argtuple.pop()) {
                                 Some(Value::String(s)) => {
@@ -471,10 +471,10 @@ impl<Iter> Deserializer<Iter>
                                     let bytes = s.chars().map(|ch| ch as u8).collect();
                                     self.stack.push(Value::Bytes(bytes));
                                 }
-                                _ => return self.error(ErrorCode::InvalidStackTop),
+                                _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
                             }
                         }
-                        _ => return self.error(ErrorCode::InvalidStackTop),
+                        other => return Self::stack_error("global reference", &other, self.rdr.pos()),
                     }
                 }
 
@@ -522,8 +522,7 @@ impl<Iter> Deserializer<Iter>
         // stack instead.
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
-            // TODO!
-            item = Value::MemoRef(id);
+            item = self.memo[&id].clone();
         }
         self.memo.insert(memo_id, item);
         self.stack.push(Value::MemoRef(memo_id));
@@ -690,12 +689,14 @@ impl<Iter> Deserializer<Iter>
             (b"__builtin__", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
             (b"builtins", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
             (b"_codecs", b"encode") => self.stack.push(Value::Global(Global::Encode)),
-            _ => return self.error(ErrorCode::UnsupportedGlobal(
-                String::from_utf8_lossy(&modname).into_owned(),
-                String::from_utf8_lossy(&globname).into_owned(),
-            ))
+            _ => return self.error(ErrorCode::UnsupportedGlobal(modname, globname)),
         }
         Ok(())
+    }
+
+    fn stack_error<T>(what: &'static str, value: &Value, pos: usize) -> Result<T> {
+        let it = format!("{:?}", value);
+        Err(Error::Eval(ErrorCode::InvalidStackTop(what, it), pos))
     }
 
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
