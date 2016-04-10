@@ -91,13 +91,11 @@ pub struct Deserializer<Iter: Iterator<Item=io::Result<u8>>> {
     ch: Option<u8>,
     value: Option<Value>,
     memo: BTreeMap<MemoId, Value>,
+    memo_refs: BTreeMap<MemoId, i32>,
     stack: Vec<Value>,
     stacks: Vec<Vec<Value>>,
     decode_strings: bool,
 }
-
-// TODO: add a counter for how many memo references a key has, to avoid
-// a lot of unnecessary clones.
 
 impl<Iter> Deserializer<Iter>
     where Iter: Iterator<Item=io::Result<u8>>
@@ -108,6 +106,7 @@ impl<Iter> Deserializer<Iter>
             ch: None,
             value: None,
             memo: BTreeMap::new(),
+            memo_refs: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
             decode_strings: decode_strings,
@@ -182,16 +181,16 @@ impl<Iter> Deserializer<Iter>
                         Ok(v) => v,
                         Err(_) => return self.error(ErrorCode::InvalidLiteral(bytes)),
                     };
-                    self.stack.push(Value::MemoRef(memo_id));
+                    self.push_memo_ref(memo_id);
                 }
                 BINGET => {
-                    let memo_id = try!(self.read_byte());
-                    self.stack.push(Value::MemoRef(memo_id as MemoId));
+                    let memo_id = try!(self.read_byte()) as MemoId;
+                    self.push_memo_ref(memo_id);
                 }
                 LONG_BINGET => {
                     let bytes = try!(self.read_bytes(4));
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    self.stack.push(Value::MemoRef(memo_id));
+                    self.push_memo_ref(memo_id);
                 }
 
                 // Singletons
@@ -492,8 +491,8 @@ impl<Iter> Deserializer<Iter>
     }
 
     fn pop_resolve(&mut self) -> Result<Value> {
-        match self.stack.pop() {
-            Some(Value::MemoRef(n)) => Ok(self.memo[&n].clone()),
+        let top = self.stack.pop();
+        match self.resolve(top) {
             Some(v) => Ok(v),
             None    => self.error(ErrorCode::StackUnderflow)
         }
@@ -517,23 +516,65 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    fn push_memo_ref(&mut self, memo_id: MemoId) {
+        self.stack.push(Value::MemoRef(memo_id));
+        let count = self.memo_refs.entry(memo_id).or_insert(0);
+        *count = *count + 1;
+    }
+
     fn memoize(&mut self, memo_id: MemoId) -> Result<()> {
-        // Move the actual object into the memo, and save a reference on the
-        // stack instead.
+        // Memoize the current stack top with the given ID.  Moves the actual
+        // object into the memo, and saves a reference on the stack instead.
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
+            // TODO: is this even possible?
+            println!("WARN: putting memo ref on memo");
             item = self.memo[&id].clone();
         }
         self.memo.insert(memo_id, item);
-        self.stack.push(Value::MemoRef(memo_id));
+        self.push_memo_ref(memo_id);
         Ok(())
     }
 
-    fn resolve(&self, maybe_memo: Option<Value>) -> Option<Value> {
+    fn resolve(&mut self, maybe_memo: Option<Value>) -> Option<Value> {
+        // Resolve memo reference during stream decoding.
         match maybe_memo {
-            None => None,
-            Some(Value::MemoRef(n)) => self.memo.get(&n).map(Clone::clone),
-            some_other => some_other
+            Some(Value::MemoRef(id)) => {
+                if let Some(count) = self.memo_refs.get_mut(&id) {
+                    *count = *count - 1;
+                }
+                // We can't remove it from the memo here, since we haven't
+                // decoded the whole stream yet and there may be further
+                // references to the value.
+                self.memo.get(&id).map(Clone::clone)
+            }
+            other => other
+        }
+    }
+
+    fn resolve_recursive<T, F>(&mut self, id: MemoId, f: F) -> Result<T>
+        where F: Fn(&mut Self, Value) -> Result<T>
+    {
+        // Resolve memo reference during Value deserializing.
+        //
+        // Take the value from the memo while visiting it.  This prevents us
+        // from trying to depickle recursive structures, which we can't do
+        // because our Values aren't references.
+        let value = match self.memo.remove(&id) {
+            Some(value) => value,
+            None => return Err(Error::Syntax(ErrorCode::Recursive)),
+        };
+        let new_count = if let Some(count) = self.memo_refs.get_mut(&id) {
+            *count = *count - 1;
+            *count
+        } else { 0 };
+        if new_count <= 0 {
+            f(self, value)
+            // No need to put it back.
+        } else {
+            let result = f(self, value.clone());
+            self.memo.insert(id, value);
+            result
         }
     }
 
@@ -746,16 +787,7 @@ impl<Iter> Deserializer<Iter>
                 Ok(value::Value::Dict(map))
             },
             Value::MemoRef(memo_id) => {
-                // Take the value from the memo while visiting it.  This prevents
-                // us from trying to depickle recursive structures, which we can't
-                // do because our Values aren't references.
-                let value = match self.memo.remove(&memo_id) {
-                    Some(value) => value,
-                    None => return Err(Error::Syntax(ErrorCode::Recursive)),
-                };
-                let real_value = try!(self.deserialize_value(value.clone()));
-                self.memo.insert(memo_id, value);
-                Ok(real_value)
+                self.resolve_recursive(memo_id, |slf, value| slf.deserialize_value(value))
             },
             Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
         }
@@ -821,17 +853,10 @@ impl<Iter> de::Deserializer for Deserializer<Iter>
                 })
             },
             Value::MemoRef(memo_id) => {
-                // Take the value from the memo while visiting it.  This prevents
-                // us from trying to depickle recursive structures, which we can't
-                // do because our Values aren't references.
-                let value = match self.memo.remove(&memo_id) {
-                    Some(value) => value,
-                    None => return Err(Error::Syntax(ErrorCode::Recursive)),
-                };
-                self.value = Some(value.clone());
-                let real_value = try!(de::Deserialize::deserialize(self));
-                self.memo.insert(memo_id, value);
-                Ok(real_value)
+                self.resolve_recursive(memo_id, |slf, value| {
+                    slf.value = Some(value);
+                    de::Deserialize::deserialize(slf)
+                })
             },
             Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
         }

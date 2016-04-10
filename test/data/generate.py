@@ -38,3 +38,9 @@ max_proto = {2: 2, 3: 4}[major]
 for proto in range(max_proto + 1):
     with open('tests_py%d_proto%d.pickle' % (major, proto), 'wb') as fp:
         pickle.dump(test_object, fp, proto)
+
+# Generate recursive structure.
+my_list = []
+my_list.append(([my_list], ))
+with open('test_recursive.pickle', 'wb') as fp:
+    pickle.dump()
