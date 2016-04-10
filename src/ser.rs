@@ -140,7 +140,11 @@ impl<W: io::Write> Serializer<W> {
             }
             bytes
         } else {
-            i.to_bytes_le().1
+            let mut bytes = i.to_bytes_le().1;
+            if bytes.last().unwrap() >= &0x80 {
+                bytes.push(0x00);
+            }
+            bytes
         };
         if bytes.len() < 256 {
             try!(self.write_opcode(LONG1));

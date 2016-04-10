@@ -766,7 +766,7 @@ impl<Iter> Deserializer<Iter>
             },
             Value::Tuple(v) => {
                 let new_list: Vec<_> = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
-                Ok(value::Value::Tuple(new_list.into_boxed_slice()))
+                Ok(value::Value::Tuple(new_list))
             },
             Value::Set(v) => {
                 let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)

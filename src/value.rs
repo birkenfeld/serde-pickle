@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_map;
 use std::vec;
 use num_bigint::BigInt;
-use num_traits::ToPrimitive;
+use num_traits::{Signed, ToPrimitive};
 use serde::{ser, de};
 
 use error::{Error, ErrorCode};
@@ -35,7 +35,7 @@ pub enum Value {
     /// List
     List(Vec<Value>),
     /// Tuple
-    Tuple(Box<[Value]>),
+    Tuple(Vec<Value>),
     /// Set
     Set(BTreeSet<HashableValue>),
     /// Frozen (immutable) set
@@ -61,7 +61,7 @@ pub enum HashableValue {
     /// Unicode string
     String(String),
     /// Tuple
-    Tuple(Box<[HashableValue]>),
+    Tuple(Vec<HashableValue>),
     /// Frozen (immutable) set
     FrozenSet(BTreeSet<HashableValue>),
 }
@@ -106,20 +106,12 @@ impl HashableValue {
 //     }
 // }
 
-fn values_to_hashable(values: Box<[Value]>) -> Result<Box<[HashableValue]>, Error> {
-    values.into_vec()
-          .into_iter()
-          .map(Value::to_hashable)
-          .collect::<Result<Vec<_>, _>>()
-          .map(Vec::into_boxed_slice)
+fn values_to_hashable(values: Vec<Value>) -> Result<Vec<HashableValue>, Error> {
+    values.into_iter().map(Value::to_hashable).collect()
 }
 
-fn hashable_to_values(values: Box<[HashableValue]>) -> Box<[Value]> {
-    values.into_vec()
-          .into_iter()
-          .map(HashableValue::to_value)
-          .collect::<Vec<_>>()
-          .into_boxed_slice()
+fn hashable_to_values(values: Vec<HashableValue>) -> Vec<Value> {
+    values.into_iter().map(HashableValue::to_value).collect()
 }
 
 impl PartialEq for HashableValue {
@@ -149,16 +141,19 @@ impl Ord for HashableValue {
                 _    => Ordering::Less
             },
             Bool(b) => match *other {
-                Bool(b2) => b.cmp(&b2),
-                None     => Ordering::Greater,
-                _        => Ordering::Less
+                None         => Ordering::Greater,
+                Bool(b2)     => b.cmp(&b2),
+                I64(i2)      => (b as i64).cmp(&i2),
+                Int(ref bi)  => BigInt::from(b as i64).cmp(bi),
+                F64(f)       => float_ord(b as i64 as f64, f),
+                _            => Ordering::Less
             },
             I64(i) => match *other {
                 None         => Ordering::Greater,
                 Bool(b)      => i.cmp(&(b as i64)),
                 I64(i2)      => i.cmp(&i2),
                 Int(ref bi)  => BigInt::from(i).cmp(bi),
-                F64(f)       => i.cmp(&(f as i64)),
+                F64(f)       => float_ord(i as f64, f),
                 _            => Ordering::Less
             },
             Int(ref bi) => match *other {
@@ -166,7 +161,7 @@ impl Ord for HashableValue {
                 Bool(b)      => bi.cmp(&BigInt::from(b as i64)),
                 I64(i)       => bi.cmp(&BigInt::from(i)),
                 Int(ref bi2) => bi.cmp(bi2),
-                F64(f)       => bi.cmp(&BigInt::from(f as i64)),
+                F64(f)       => float_bigint_ord(bi, f),
                 _            => Ordering::Less
             },
             F64(f) => match *other {
@@ -207,6 +202,13 @@ fn float_ord(f: f64, g: f64) -> Ordering {
     match f.partial_cmp(&g) {
         Some(o) => o,
         None    => Ordering::Less
+    }
+}
+
+fn float_bigint_ord(bi: &BigInt, g: f64) -> Ordering {
+    match bi.to_f64() {
+        Some(f) => float_ord(f, g),
+        None => if bi.is_positive() { Ordering::Greater } else { Ordering::Less }
     }
 }
 
@@ -354,7 +356,7 @@ impl de::Deserialize for HashableValue {
                 where V: de::SeqVisitor,
             {
                 let values = try!(de::impls::VecVisitor::new().visit_seq(visitor));
-                Ok(HashableValue::Tuple(values.into_boxed_slice()))
+                Ok(HashableValue::Tuple(values))
             }
         }
 
@@ -410,7 +412,6 @@ impl de::Deserializer for Deserializer {
                 })
             },
             Value::Tuple(v) => {
-                let v = v.into_vec();
                 visitor.visit_seq(SeqDeserializer {
                     de: self,
                     len: v.len(),
@@ -649,15 +650,14 @@ impl ser::Serializer for Serializer {
     #[inline]
     fn serialize_unit_variant(&mut self, _name: &str, _variant_index: usize, variant: &str)
                               -> Result<(), Error> {
-        self.values.push(Value::Tuple(Box::new([Value::String(variant.into())])));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into())]));
         Ok(())
     }
 
     #[inline]
     fn serialize_newtype_variant<T>(&mut self, _name: &str, _variant_index: usize, variant: &str,
                                     value: T) -> Result<(), Error> where T: ser::Serialize {
-        self.values.push(Value::Tuple(Box::new([Value::String(variant.into()),
-                                         to_value(&value)])));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()), to_value(&value)]));
         Ok(())
     }
 
@@ -666,7 +666,7 @@ impl ser::Serializer for Serializer {
                                   visitor: V) -> Result<(), Error> where V: ser::SeqVisitor {
         let mut ser = Serializer::new();
         try!(ser.serialize_seq(visitor));
-        self.values.push(Value::Tuple(Box::new([Value::String(variant.into()), ser.unwrap()])));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()), ser.unwrap()]));
         Ok(())
     }
 
@@ -675,7 +675,7 @@ impl ser::Serializer for Serializer {
                                    visitor: V) -> Result<(), Error> where V: ser::MapVisitor {
         let mut ser = Serializer::new();
         try!(ser.serialize_map(visitor));
-        self.values.push(Value::Tuple(Box::new([Value::String(variant.into()), ser.unwrap()])));
+        self.values.push(Value::Tuple(vec![Value::String(variant.into()), ser.unwrap()]));
         Ok(())
     }
 

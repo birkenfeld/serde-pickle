@@ -5,6 +5,10 @@
 // according to those terms.
 
 extern crate rand;
+extern crate quickcheck;
+extern crate serde_json;
+
+mod arby;
 
 mod value_tests {
     use std::fs::File;
@@ -12,7 +16,9 @@ mod value_tests {
     use std::iter::FromIterator;
     use num_bigint::BigInt;
     use super::rand::{Rng, thread_rng};
-    use {value_from_reader, value_to_vec, value_from_slice};
+    use super::quickcheck::{QuickCheck, StdGen};
+    use super::serde_json;
+    use {value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
     use {Value, HashableValue};
     use error::{Error, ErrorCode};
 
@@ -27,18 +33,18 @@ mod value_tests {
         let longish = BigInt::from(10000000000u64) * BigInt::from(10000000000u64);
         let mut map = BTreeMap::new();
         map.insert(HashableValue::None, Value::None);
-        map.insert(HashableValue::Bool(false), Value::Tuple(Box::new([Value::Bool(false),
-                                                                      Value::Bool(true)])));
+        map.insert(HashableValue::Bool(false), Value::Tuple(vec![Value::Bool(false),
+                                                                 Value::Bool(true)]));
         map.insert(HashableValue::I64(10), Value::I64(100000));
         map.insert(HashableValue::Int(longish.clone()), Value::Int(longish));
         map.insert(HashableValue::F64(1.0), Value::F64(1.0));
         map.insert(HashableValue::Bytes(b"bytes".to_vec()), Value::Bytes(b"bytes".to_vec()));
         map.insert(HashableValue::String("string".into()), Value::String("string".into()));
-        map.insert(HashableValue::Tuple(Box::new([HashableValue::I64(1), HashableValue::I64(2)])),
-                   Value::Tuple(Box::new([Value::I64(1), Value::I64(2), Value::I64(3)])));
+        map.insert(HashableValue::Tuple(vec![HashableValue::I64(1), HashableValue::I64(2)]),
+                   Value::Tuple(vec![Value::I64(1), Value::I64(2), Value::I64(3)]));
         let set = BTreeSet::from_iter(vec![HashableValue::I64(42), HashableValue::I64(0)]);
         map.insert(HashableValue::FrozenSet(set.clone()), Value::FrozenSet(set.clone()));
-        map.insert(HashableValue::Tuple(Box::new([])),
+        map.insert(HashableValue::Tuple(vec![]),
                    Value::List(vec![
                        Value::List(vec![Value::I64(1), Value::I64(2), Value::I64(3)]),
                        Value::Set(set),
@@ -89,6 +95,34 @@ mod value_tests {
             // last byte is a STOP opcode.
             assert!(value_from_slice(&stream).is_err());
         }
+    }
+
+    #[test]
+    fn qc_roundtrip() {
+        fn roundtrip(original: Value) {
+            let vec: Vec<_> = value_to_vec(&original, true).unwrap();
+            let tripped = value_from_slice(&vec).unwrap();
+            assert_eq!(original, tripped);
+        }
+        QuickCheck::new().gen(StdGen::new(thread_rng(), 10))
+                         .tests(10000)
+                         .quickcheck(roundtrip as fn(_));
+    }
+
+    #[test]
+    fn roundtrip_json() {
+        let original: serde_json::Value = serde_json::from_str(r#"[
+            {"null": null,
+             "false": false,
+             "true": true,
+             "int": -1238571,
+             "float": 1.5e10,
+             "list": [false, 5, "true", 3.8]
+            }
+        ]"#).unwrap();
+        let vec: Vec<_> = to_vec(&original, true).unwrap();
+        let tripped = from_slice(&vec).unwrap();
+        assert_eq!(original, tripped);
     }
 }
 
