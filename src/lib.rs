@@ -9,7 +9,11 @@
 //! # Pickle format
 //!
 //! Please see the [Python docs](http://docs.python.org/library/pickle) for
-//! details on the pickle format.
+//! details on the Pickle format.
+//!
+//! This crate supports all Pickle protocols (0 to 4) when reading, and writing
+//! protocol 2 (compatible with Python 2 and 3), or protocol 3 (compatible with
+//! Python 3 only).
 //!
 //! # Supported types
 //!

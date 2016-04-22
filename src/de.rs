@@ -15,6 +15,7 @@ use std::mem;
 use std::str;
 use std::char;
 use std::vec;
+use std::str::FromStr;
 use std::collections::BTreeMap;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
@@ -89,17 +90,20 @@ impl<Iter: Iterator<Item=io::Result<u8>>> CharIter<Iter> {
 pub struct Deserializer<Iter: Iterator<Item=io::Result<u8>>> {
     rdr: CharIter<Iter>,
     ch: Option<u8>,
-    value: Option<Value>,
-    memo: BTreeMap<MemoId, Value>,
-    memo_refs: BTreeMap<MemoId, i32>,
-    stack: Vec<Value>,
-    stacks: Vec<Vec<Value>>,
-    decode_strings: bool,
+    value: Option<Value>,               // next value to deserialize
+    memo: BTreeMap<MemoId, Value>,      // pickle memo
+    memo_refs: BTreeMap<MemoId, i32>,   // number of references to memo items
+    stack: Vec<Value>,                  // topmost items on the stack
+    stacks: Vec<Vec<Value>>,            // items further down the stack, between MARKs
+    decode_strings: bool,               // protocol specific switch
 }
 
 impl<Iter> Deserializer<Iter>
     where Iter: Iterator<Item=io::Result<u8>>
 {
+    /// Construct a new Deserializer.  The second argument decides whether
+    /// strings (STRING opcodes, saved only by protocols 0-2) are decoded as
+    /// UTF-8 strings or left as byte vectors.
     pub fn new(rdr: Iter, decode_strings: bool) -> Deserializer<Iter> {
         Deserializer {
             rdr: CharIter::new(rdr),
@@ -113,6 +117,16 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    /// Get the next value to deserialize, either by parsing the pickle stream
+    /// or from `self.value`.
+    fn get_next_value(&mut self) -> Result<Value> {
+        match self.value.take() {
+            Some(v) => Ok(v),
+            None => self.parse_value(),
+        }
+    }
+
+    /// Assert that we reached the end of the stream.
     pub fn end(&mut self) -> Result<()> {
         match self.ch.take() {
             Some(_) => self.error(ErrorCode::TrailingBytes),
@@ -124,19 +138,15 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
-    fn get_next_value(&mut self) -> Result<Value> {
-        match self.value.take() {
-            Some(v) => Ok(v),
-            None => self.parse_value(),
-        }
-    }
-
+    /// Parse a value from the underlying stream.  This will consume the whole
+    /// pickle until the STOP opcode.
     fn parse_value(&mut self) -> Result<Value> {
         loop {
             match try!(self.read_byte()) {
                 // Specials
                 PROTO => {
-                    // Ignore this, as it is only important for instances (read the version byte).
+                    // Ignore this, as it is only important for instances (read
+                    // the version byte).
                     try!(self.read_byte());
                 }
                 FRAME => {
@@ -161,10 +171,7 @@ impl<Iter> Deserializer<Iter>
                 // Memo saving ops
                 PUT => {
                     let bytes = try!(self.read_line());
-                    let memo_id = match str::from_utf8(&bytes).unwrap_or("").parse() {
-                        Ok(v) => v,
-                        Err(_) => return self.error(ErrorCode::InvalidLiteral(bytes)),
-                    };
+                    let memo_id = try!(self.parse_ascii(bytes));
                     try!(self.memoize(memo_id));
                 }
                 BINPUT => {
@@ -184,10 +191,7 @@ impl<Iter> Deserializer<Iter>
                 // Memo getting ops
                 GET => {
                     let bytes = try!(self.read_line());
-                    let memo_id = match str::from_utf8(&bytes).unwrap_or("").parse() {
-                        Ok(v) => v,
-                        Err(_) => return self.error(ErrorCode::InvalidLiteral(bytes)),
-                    };
+                    let memo_id = try!(self.parse_ascii(bytes));
                     self.push_memo_ref(memo_id);
                 }
                 BINGET => {
@@ -208,44 +212,24 @@ impl<Iter> Deserializer<Iter>
                 // ASCII-formatted numbers
                 INT => {
                     let line = try!(self.read_line());
-                    // Handle protocol 1 way of spelling true/false
-                    if line == b"00" {
-                        self.stack.push(Value::Bool(false))
-                    } else if line == b"01" {
-                        self.stack.push(Value::Bool(true))
-                    } else {
-                        match str::from_utf8(&line).unwrap_or("").parse::<i64>() {
-                            Ok(i)  => self.stack.push(Value::I64(i)),
-                            Err(_) => return self.error(ErrorCode::InvalidLiteral(line.into()))
-                        }
-                    }
+                    let val = try!(self.decode_text_int(line));
+                    self.stack.push(val);
                 }
                 LONG => {
-                    let mut line = try!(self.read_line());
-                    // Remove "L" suffix.
-                    if line.last() == Some(&b'L') { line.pop(); }
-                    match BigInt::parse_bytes(&line, 10) {
-                        Some(i)  => self.stack.push(Value::Int(i)),
-                        None => return self.error(ErrorCode::InvalidLiteral(line.into()))
-                    }
+                    let line = try!(self.read_line());
+                    let long = try!(self.decode_text_long(line));
+                    self.stack.push(long);
                 }
                 FLOAT => {
                     let line = try!(self.read_line());
-                    match str::from_utf8(&line).unwrap_or("").parse::<f64>() {
-                        Ok(f)  => self.stack.push(Value::F64(f)),
-                        Err(_) => return self.error(ErrorCode::InvalidLiteral(line.into()))
-                    }
+                    let f = try!(self.parse_ascii(line));
+                    self.stack.push(Value::F64(f));
                 }
 
-                // Until-EOL strings
+                // ASCII-formatted strings
                 STRING => {
                     let line = try!(self.read_line());
-                    // Remove quotes.
-                    let slice = if line.len() >= 2 && line[0] == line[line.len() - 1] &&
-                        (line[0] == b'"' || line[0] == b'\'') {
-                            &line[1..line.len() - 1]
-                        } else { &*line };
-                    let string = try!(self.decode_escaped_string(slice));
+                    let string = try!(self.decode_escaped_string(&line));
                     self.stack.push(string);
                 }
                 UNICODE => {
@@ -271,16 +255,14 @@ impl<Iter> Deserializer<Iter>
                     let bytes = try!(self.read_bytes(2));
                     self.stack.push(Value::I64(LittleEndian::read_u16(&bytes) as i64));
                 }
-
-                // Length-prefixed longs
                 LONG1 => {
                     let bytes = try!(self.read_u8_prefixed_bytes());
-                    let long = self.decode_long(bytes);
+                    let long = self.decode_binary_long(bytes);
                     self.stack.push(long);
                 }
                 LONG4 => {
                     let bytes = try!(self.read_i32_prefixed_bytes());
-                    let long = self.decode_long(bytes);
+                    let long = self.decode_binary_long(bytes);
                     self.stack.push(long);
                 }
 
@@ -323,18 +305,18 @@ impl<Iter> Deserializer<Iter>
                     self.stack.push(decoded);
                 }
 
-                // Containers
+                // Tuples
                 EMPTY_TUPLE => self.stack.push(Value::Tuple(Vec::new())),
                 TUPLE1 => {
                     let item = try!(self.pop());
                     self.stack.push(Value::Tuple(vec![item]));
-                }
-                TUPLE2 => {
+                 }
+                 TUPLE2 => {
                     let item2 = try!(self.pop());
                     let item1 = try!(self.pop());
                     self.stack.push(Value::Tuple(vec![item1, item2]));
-                }
-                TUPLE3 => {
+                 }
+                 TUPLE3 => {
                     let item3 = try!(self.pop());
                     let item2 = try!(self.pop());
                     let item1 = try!(self.pop());
@@ -344,92 +326,58 @@ impl<Iter> Deserializer<Iter>
                     let items = try!(self.pop_mark());
                     self.stack.push(Value::Tuple(items));
                 }
+
+                // Lists
                 EMPTY_LIST => self.stack.push(Value::List(vec![])),
                 LIST => {
                     let items = try!(self.pop_mark());
                     self.stack.push(Value::List(items));
                 }
                 APPEND => {
-                    let pos = self.rdr.pos();
                     let value = try!(self.pop());
-                    let top = try!(self.top());
-                    if let Value::List(ref mut list) = *top {
-                        list.push(value);
-                    } else {
-                        return Self::stack_error("list", top, pos);
-                    }
+                    try!(self.modify_list(|list| list.push(value)));
                 }
                 APPENDS => {
-                    let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
-                    let top = try!(self.top());
-                    if let Value::List(ref mut list) = *top {
-                        list.extend(items);
-                    } else {
-                        return Self::stack_error("list", top, pos);
-                    }
+                    try!(self.modify_list(|list| list.extend(items)));
                 }
+
+                // Dicts
                 EMPTY_DICT => self.stack.push(Value::Dict(Vec::new())),
                 DICT => {
                     let items = try!(self.pop_mark());
                     let mut dict = Vec::with_capacity(items.len() / 2);
-                    let mut key = None;
-                    for value in items {
-                        match key.take() {
-                            None      => key = Some(value),
-                            Some(key) => { dict.push((key, value)); }
-                        }
-                    }
+                    Self::extend_dict(&mut dict, items);
                     self.stack.push(Value::Dict(dict));
                 }
                 SETITEM => {
-                    let pos = self.rdr.pos();
                     let value = try!(self.pop());
                     let key = try!(self.pop());
-                    let top = try!(self.top());
-                    if let Value::Dict(ref mut dict) = *top {
-                        dict.push((key, value));
-                    } else {
-                        return Self::stack_error("dict", top, pos);
-                    }
+                    try!(self.modify_dict(|dict| dict.push((key, value))));
                 }
                 SETITEMS => {
-                    let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
-                    let top = try!(self.top());
-                    if let Value::Dict(ref mut dict) = *top {
-                        let mut key = None;
-                        for value in items {
-                            match key.take() {
-                                None      => key = Some(value),
-                                Some(key) => { dict.push((key, value)); }
-                            }
-                        }
-                    } else {
-                        return Self::stack_error("dict", top, pos);
-                    }
+                    try!(self.modify_dict(|dict| Self::extend_dict(dict, items)));
                 }
+
+                // Sets and frozensets
                 EMPTY_SET => self.stack.push(Value::Set(Vec::new())),
                 FROZENSET => {
                     let items = try!(self.pop_mark());
                     self.stack.push(Value::FrozenSet(items));
                 }
                 ADDITEMS => {
-                    let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
-                    let top = try!(self.top());
-                    if let Value::Set(ref mut set) = *top {
-                        set.extend(items);
-                    } else {
-                        return Self::stack_error("set", top, pos);
-                    }
+                    try!(self.modify_set(|set| set.extend(items)));
                 }
 
                 // Arbitrary module globals, used here for unpickling set and frozenset
+                // from protocols < 4
                 GLOBAL => {
                     let modname = try!(self.read_line());
                     let globname = try!(self.read_line());
-                    try!(self.handle_global(modname, globname));
+                    let value = try!(self.decode_global(modname, globname));
+                    self.stack.push(value);
                 }
                 STACK_GLOBAL => {
                     let globname = match try!(self.pop()) {
@@ -440,7 +388,8 @@ impl<Iter> Deserializer<Iter>
                         Value::String(string) => string.into_bytes(),
                         other => return Self::stack_error("string", &other, self.rdr.pos()),
                     };
-                    try!(self.handle_global(modname, globname));
+                    let value = try!(self.decode_global(modname, globname));
+                    self.stack.push(value);
                 }
                 REDUCE => {
                     let argtuple = match try!(self.pop_resolve()) {
@@ -451,12 +400,13 @@ impl<Iter> Deserializer<Iter>
                     try!(self.reduce_global(global, argtuple));
                 }
 
-                // Unsupported (object building, and memoizing) opcodes
+                // Unsupported (mostly class instance building) opcodes
                 code => return self.error(ErrorCode::Unsupported(code as char))
             }
         }
     }
 
+    // Pop the stack top item.
     fn pop(&mut self) -> Result<Value> {
         match self.stack.pop() {
             Some(v) => Ok(v),
@@ -464,6 +414,7 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    // Pop the stack top item, and resolve it if it is a memo reference.
     fn pop_resolve(&mut self) -> Result<Value> {
         let top = self.stack.pop();
         match self.resolve(top) {
@@ -472,6 +423,7 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    // Mutably view the stack top item.
     fn top(&mut self) -> Result<&mut Value> {
         match self.stack.last_mut() {
             None => Err(Error::Eval(ErrorCode::StackUnderflow, self.rdr.pos())),
@@ -484,6 +436,7 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    // Pop all topmost stack items until the next MARK.
     fn pop_mark(&mut self) -> Result<Vec<Value>> {
         match self.stacks.pop() {
             Some(new) => Ok(mem::replace(&mut self.stack, new)),
@@ -491,15 +444,16 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    // Pushes a memo reference on the stack, and increases the usage counter.
     fn push_memo_ref(&mut self, memo_id: MemoId) {
         self.stack.push(Value::MemoRef(memo_id));
         let count = self.memo_refs.entry(memo_id).or_insert(0);
         *count = *count + 1;
     }
 
+    // Memoize the current stack top with the given ID.  Moves the actual
+    // object into the memo, and saves a reference on the stack instead.
     fn memoize(&mut self, memo_id: MemoId) -> Result<()> {
-        // Memoize the current stack top with the given ID.  Moves the actual
-        // object into the memo, and saves a reference on the stack instead.
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
@@ -511,8 +465,8 @@ impl<Iter> Deserializer<Iter>
         Ok(())
     }
 
+    // Resolve memo reference during stream decoding.
     fn resolve(&mut self, maybe_memo: Option<Value>) -> Option<Value> {
-        // Resolve memo reference during stream decoding.
         match maybe_memo {
             Some(Value::MemoRef(id)) => {
                 if let Some(count) = self.memo_refs.get_mut(&id) {
@@ -527,11 +481,10 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    // Resolve memo reference during Value deserializing.
     fn resolve_recursive<T, F>(&mut self, id: MemoId, f: F) -> Result<T>
         where F: Fn(&mut Self, Value) -> Result<T>
     {
-        // Resolve memo reference during Value deserializing.
-        //
         // Take the value from the memo while visiting it.  This prevents us
         // from trying to depickle recursive structures, which we can't do
         // because our Values aren't references.
@@ -605,18 +558,51 @@ impl<Iter> Deserializer<Iter>
         self.read_bytes(lenbyte as u64)
     }
 
-    fn decode_string(&self, string: Vec<u8>) -> Result<Value> {
-        if self.decode_strings {
-            self.decode_unicode(string)
-        } else {
-            Ok(Value::Bytes(string))
+    // Parse an expected ASCII literal from the stream or raise an error.
+    fn parse_ascii<T: FromStr>(&self, bytes: Vec<u8>) -> Result<T> {
+        match str::from_utf8(&bytes).unwrap_or("").parse() {
+            Ok(v) => Ok(v),
+            Err(_) => self.error(ErrorCode::InvalidLiteral(bytes)),
         }
     }
 
-    fn decode_escaped_string(&self, s: &[u8]) -> Result<Value> {
-        // These are encoded with "normal" Python string escape rules.
-        let mut result = Vec::with_capacity(s.len());
-        let mut iter = s.iter();
+    // Decode a text-encoded integer.
+    fn decode_text_int(&self, line: Vec<u8>) -> Result<Value> {
+        // Handle protocol 1 way of spelling true/false
+        Ok(if line == b"00" {
+            Value::Bool(false)
+        } else if line == b"01" {
+            Value::Bool(true)
+        } else {
+            let i = try!(self.parse_ascii(line));
+            Value::I64(i)
+        })
+    }
+
+    // Decode a text-encoded long integer.
+    fn decode_text_long(&self, mut line: Vec<u8>) -> Result<Value> {
+        // Remove "L" suffix.
+        if line.last() == Some(&b'L') { line.pop(); }
+        match BigInt::parse_bytes(&line, 10) {
+            Some(i)  => Ok(Value::Int(i)),
+            None => self.error(ErrorCode::InvalidLiteral(line.into()))
+        }
+    }
+
+    // Decode an escaped string.  These are encoded with "normal" Python string
+    // escape rules.
+    fn decode_escaped_string(&self, slice: &[u8]) -> Result<Value> {
+        // Remove quotes if they appear.
+        let slice = if (slice.len() >= 2) &&
+            (slice[0] == slice[slice.len() - 1]) &&
+            (slice[0] == b'"' || slice[0] == b'\'')
+        {
+            &slice[1..slice.len() - 1]
+        } else {
+            slice
+        };
+        let mut result = Vec::with_capacity(slice.len());
+        let mut iter = slice.iter();
         while let Some(&b) = iter.next() {
             match b {
                 b'\\' => match iter.next() {
@@ -636,10 +622,10 @@ impl<Iter> Deserializer<Iter>
                                             .map(|v2| 16*(v1 as u8) + (v2 as u8)))
                         {
                             Some(v) => result.push(v),
-                            None => return self.error(ErrorCode::InvalidLiteral(s.into()))
+                            None => return self.error(ErrorCode::InvalidLiteral(slice.into()))
                         }
                     },
-                    _ => return self.error(ErrorCode::InvalidLiteral(s.into())),
+                    _ => return self.error(ErrorCode::InvalidLiteral(slice.into())),
                 },
                 _ => result.push(b)
             }
@@ -647,17 +633,10 @@ impl<Iter> Deserializer<Iter>
         self.decode_string(result)
     }
 
-    fn decode_unicode(&self, string: Vec<u8>) -> Result<Value> {
-        match String::from_utf8(string) {
-            Ok(v)  => Ok(Value::String(v)),
-            Err(_) => self.error(ErrorCode::StringNotUTF8)
-        }
-    }
-
+    // Decode escaped Unicode strings. These are encoded with "raw-unicode-escape",
+    // which only knows the \uXXXX and \UYYYYYYYY escapes. The backslash is escaped
+    // in this way, too.
     fn decode_escaped_unicode(&self, s: &[u8]) -> Result<Value> {
-        // These are encoded with "raw-unicode-escape", which only knows
-        // the \uXXXX and \UYYYYYYYY escapes.  The backslash is escaped
-        // in this way, too.
         let mut result = String::with_capacity(s.len());
         let mut iter = s.iter();
         while let Some(&b) = iter.next() {
@@ -687,7 +666,25 @@ impl<Iter> Deserializer<Iter>
         Ok(Value::String(result))
     }
 
-    fn decode_long(&self, bytes: Vec<u8>) -> Value {
+    // Decode a string - either as Unicode or as bytes.
+    fn decode_string(&self, string: Vec<u8>) -> Result<Value> {
+        if self.decode_strings {
+            self.decode_unicode(string)
+        } else {
+            Ok(Value::Bytes(string))
+        }
+    }
+
+    // Decode a Unicode string from UTF-8.
+    fn decode_unicode(&self, string: Vec<u8>) -> Result<Value> {
+        match String::from_utf8(string) {
+            Ok(v)  => Ok(Value::String(v)),
+            Err(_) => self.error(ErrorCode::StringNotUTF8)
+        }
+    }
+
+    // Decode a binary-encoded long integer.
+    fn decode_binary_long(&self, bytes: Vec<u8>) -> Value {
         // BigInt::from_bytes_le doesn't like a sign bit in the bytes, therefore
         // we have to extract that ourselves and do the two-s complement.
         let negative = !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80 != 0);
@@ -698,7 +695,56 @@ impl<Iter> Deserializer<Iter>
         Value::Int(val)
     }
 
-    fn handle_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<()> {
+    // Modify the stack-top list.
+    fn modify_list<F>(&mut self, f: F) -> Result<()> where F: FnOnce(&mut Vec<Value>) {
+        let pos = self.rdr.pos();
+        let top = try!(self.top());
+        if let Value::List(ref mut list) = *top {
+            Ok(f(list))
+        } else {
+            Self::stack_error("list", top, pos)
+        }
+    }
+
+    // Push items from a (key, value, key, value) flattened list onto a (key, value) vec.
+    fn extend_dict(dict: &mut Vec<(Value, Value)>, items: Vec<Value>) {
+        let mut key = None;
+        for value in items {
+            match key.take() {
+                None      => key = Some(value),
+                Some(key) => dict.push((key, value))
+            }
+        }
+    }
+
+    // Modify the stack-top dict.
+    fn modify_dict<F>(&mut self, f: F) -> Result<()>
+        where F: FnOnce(&mut Vec<(Value, Value)>)
+    {
+        let pos = self.rdr.pos();
+        let top = try!(self.top());
+        if let Value::Dict(ref mut dict) = *top {
+            Ok(f(dict))
+        } else {
+            Self::stack_error("dict", top, pos)
+        }
+    }
+
+    // Modify the stack-top set.
+    fn modify_set<F>(&mut self, f: F) -> Result<()>
+        where F: FnOnce(&mut Vec<Value>)
+    {
+        let pos = self.rdr.pos();
+        let top = try!(self.top());
+        if let Value::Set(ref mut set) = *top {
+            Ok(f(set))
+        } else {
+            Self::stack_error("set", top, pos)
+        }
+    }
+
+    // Push the Value::Global referenced by modname and globname.
+    fn decode_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<Value> {
         let value = match (&*modname, &*globname) {
             (b"_codecs", b"encode") => Value::Global(Global::Encode),
             (b"__builtin__", b"set") | (b"builtins", b"set") =>
@@ -707,10 +753,10 @@ impl<Iter> Deserializer<Iter>
                 Value::Global(Global::Frozenset),
             _ => return self.error(ErrorCode::UnsupportedGlobal(modname, globname)),
         };
-        self.stack.push(value);
-        Ok(())
+        Ok(value)
     }
 
+    // Handle the REDUCE opcode for the few Global objects we support.
     fn reduce_global(&mut self, global: Value, mut argtuple: Vec<Value>) -> Result<()> {
         match global {
             Value::Global(Global::Set) => {
@@ -747,11 +793,13 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
+    #[inline]
     fn stack_error<T>(what: &'static str, value: &Value, pos: usize) -> Result<T> {
         let it = format!("{:?}", value);
         Err(Error::Eval(ErrorCode::InvalidStackTop(what, it), pos))
     }
 
+    #[inline]
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
         Err(Error::Eval(reason, self.rdr.pos()))
     }
