@@ -22,7 +22,7 @@ use error::{Error, ErrorCode};
 /// Note on integers: the distinction between the two types (short and long) is
 /// very fuzzy in Python, and they can be used interchangeably.  In Python 3,
 /// all integers are long integers, so all are pickled as such.  While decoding,
-/// we simply put all integers that fit into an i64, and use BigInt for the
+/// we simply put all integers that fit into an i64, and use `BigInt` for the
 /// rest.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -82,17 +82,17 @@ pub enum HashableValue {
 }
 
 fn values_to_hashable(values: Vec<Value>) -> Result<Vec<HashableValue>, Error> {
-    values.into_iter().map(Value::to_hashable).collect()
+    values.into_iter().map(Value::into_hashable).collect()
 }
 
 fn hashable_to_values(values: Vec<HashableValue>) -> Vec<Value> {
-    values.into_iter().map(HashableValue::to_value).collect()
+    values.into_iter().map(HashableValue::into_value).collect()
 }
 
 impl Value {
     /// Convert the value into a hashable version, if possible.  If not, return
     /// a ValueNotHashable error.
-    pub fn to_hashable(self) -> Result<HashableValue, Error> {
+    pub fn into_hashable(self) -> Result<HashableValue, Error> {
         match self {
             Value::None         => Ok(HashableValue::None),
             Value::Bool(b)      => Ok(HashableValue::Bool(b)),
@@ -110,7 +110,7 @@ impl Value {
 
 impl HashableValue {
     /// Convert the value into its non-hashable version.  This always works.
-    pub fn to_value(self) -> Value {
+    pub fn into_value(self) -> Value {
         match self {
             HashableValue::None         => Value::None,
             HashableValue::Bool(b)      => Value::Bool(b),
@@ -155,7 +155,7 @@ impl fmt::Display for Value {
             Value::Tuple(ref v)  => write_elements(f, v.iter(), "(", ")", v.len(), v.len() == 1),
             Value::FrozenSet(ref v) => write_elements(f, v.iter(),
                                                       "frozenset([", "])", v.len(), false),
-            Value::Set(ref v)    => if v.len() == 0 {
+            Value::Set(ref v)    => if v.is_empty() {
                 write!(f, "set()")
             } else {
                 write_elements(f, v.iter(), "{", "}", v.len(), false)
@@ -207,7 +207,7 @@ impl PartialOrd for HashableValue {
     }
 }
 
-/// Implement a (more or less) consistent ordering for HashableValues
+/// Implement a (more or less) consistent ordering for `HashableValue`s
 /// so that they can be added to dictionaries and sets.
 ///
 /// Also, like in Python, numeric values with the same value (integral or not)

@@ -226,7 +226,7 @@ impl de::Deserializer for Deserializer {
                 })
             }
             Value::Set(v) | Value::FrozenSet(v) => {
-                let v: Vec<_> = v.into_iter().map(HashableValue::to_value).collect();
+                let v: Vec<_> = v.into_iter().map(HashableValue::into_value).collect();
                 visitor.visit_seq(SeqDeserializer {
                     de: self,
                     len: v.len(),
@@ -378,7 +378,7 @@ impl<'a> de::MapVisitor for MapDeserializer<'a> {
             Some((key, value)) => {
                 self.len -= 1;
                 self.value = Some(value);
-                self.de.value = Some(key.to_value());
+                self.de.value = Some(key.into_value());
                 Ok(Some(try!(de::Deserialize::deserialize(self.de))))
             }
             None => Ok(None),
@@ -424,7 +424,13 @@ impl Serializer {
 
     /// Unwrap the `Serializer` and return the `Value`.
     pub fn finish(mut self) -> Result<Value> {
-        self.values.pop().ok_or(ser::Error::custom("expected a value"))
+        self.values.pop().ok_or_else(|| ser::Error::custom("expected a value"))
+    }
+}
+
+impl Default for Serializer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -575,7 +581,7 @@ impl ser::Serializer for Serializer {
         let mut iter = ser.values.into_iter();
         while let Some(key) = iter.next() {
             let value = iter.next().unwrap();
-            let key = try!(key.to_hashable());
+            let key = try!(key.into_hashable());
             map.insert(key, value);
         }
         self.values.push(Value::Dict(map));

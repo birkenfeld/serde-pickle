@@ -55,7 +55,7 @@ impl<W: io::Write> Serializer<W> {
             HashableValue::Int(ref i) => self.serialize_bigint(i),
             HashableValue::FrozenSet(ref s) => self.serialize_set(s, b"frozenset"),
             HashableValue::Tuple(ref t) => {
-                if t.len() == 0 {
+                if t.is_empty() {
                     self.write_opcode(EMPTY_TUPLE)
                 } else {
                     try!(self.write_opcode(MARK));
@@ -110,7 +110,7 @@ impl<W: io::Write> Serializer<W> {
                 self.serialize_bigint(i)
             }
             Value::Tuple(ref t) => {
-                if t.len() == 0 {
+                if t.is_empty() {
                     self.write_opcode(EMPTY_TUPLE)
                 } else {
                     try!(self.write_opcode(MARK));
@@ -132,10 +132,10 @@ impl<W: io::Write> Serializer<W> {
 
     fn serialize_bigint(&mut self, i: &BigInt) -> Result<()> {
         let bytes = if i.is_negative() {
-            let nbytes = i.to_bytes_le().1.len();
-            let pos = i + (BigInt::from(1) << nbytes * 8);
+            let n_bytes = i.to_bytes_le().1.len();
+            let pos = i + (BigInt::from(1) << (n_bytes * 8));
             let mut bytes = pos.to_bytes_le().1;
-            while bytes.len() < nbytes {
+            while bytes.len() < n_bytes {
                 bytes.push(0x00);
             }
             if bytes.last().unwrap() < &0x80 {
@@ -175,7 +175,7 @@ impl<W: io::Write> Serializer<W> {
                 try!(self.write_opcode(APPENDS));
                 try!(self.write_opcode(MARK));
             }
-            let item = item.clone().to_value(); // XXX
+            let item = item.clone().into_value(); // XXX
             try!(self.serialize_value(&item));
         }
         try!(self.write_opcode(APPENDS));

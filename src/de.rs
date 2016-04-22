@@ -37,7 +37,7 @@ enum Global {
 /// Our intermediate representation of a value.
 ///
 /// The most striking difference to `value::Value` is that it contains a variant
-/// for "MemoRef", which references values put into the "memo" map, and a variant
+/// for `MemoRef`, which references values put into the "memo" map, and a variant
 /// for module globals that we support.
 ///
 /// We also don't use sets and maps at the Rust level, since they are not
@@ -353,7 +353,7 @@ impl<Iter> Deserializer<Iter>
                     let pos = self.rdr.pos();
                     let value = try!(self.pop());
                     let top = try!(self.top());
-                    if let &mut Value::List(ref mut list) = top {
+                    if let Value::List(ref mut list) = *top {
                         list.push(value);
                     } else {
                         return Self::stack_error("list", top, pos);
@@ -363,7 +363,7 @@ impl<Iter> Deserializer<Iter>
                     let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
                     let top = try!(self.top());
-                    if let &mut Value::List(ref mut list) = top {
+                    if let Value::List(ref mut list) = *top {
                         list.extend(items);
                     } else {
                         return Self::stack_error("list", top, pos);
@@ -387,7 +387,7 @@ impl<Iter> Deserializer<Iter>
                     let value = try!(self.pop());
                     let key = try!(self.pop());
                     let top = try!(self.top());
-                    if let &mut Value::Dict(ref mut dict) = top {
+                    if let Value::Dict(ref mut dict) = *top {
                         dict.push((key, value));
                     } else {
                         return Self::stack_error("dict", top, pos);
@@ -397,7 +397,7 @@ impl<Iter> Deserializer<Iter>
                     let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
                     let top = try!(self.top());
-                    if let &mut Value::Dict(ref mut dict) = top {
+                    if let Value::Dict(ref mut dict) = *top {
                         let mut key = None;
                         for value in items {
                             match key.take() {
@@ -418,7 +418,7 @@ impl<Iter> Deserializer<Iter>
                     let pos = self.rdr.pos();
                     let items = try!(self.pop_mark());
                     let top = try!(self.top());
-                    if let &mut Value::Set(ref mut set) = top {
+                    if let Value::Set(ref mut set) = *top {
                         set.extend(items);
                     } else {
                         return Self::stack_error("set", top, pos);
@@ -443,45 +443,12 @@ impl<Iter> Deserializer<Iter>
                     try!(self.handle_global(modname, globname));
                 }
                 REDUCE => {
-                    let mut argtuple = match try!(self.pop_resolve()) {
+                    let argtuple = match try!(self.pop_resolve()) {
                         Value::Tuple(args) => args,
                         other => return Self::stack_error("tuple", &other, self.rdr.pos()),
                     };
                     let global = try!(self.pop_resolve());
-                    match global {
-                        Value::Global(Global::Set) => {
-                            match self.resolve(argtuple.pop()) {
-                                Some(Value::List(items)) =>
-                                    self.stack.push(Value::Set(items)),
-                                _ => return self.error(ErrorCode::InvalidValue("set() arg".into())),
-                            }
-                        }
-                        Value::Global(Global::Frozenset) => {
-                            match self.resolve(argtuple.pop()) {
-                                Some(Value::List(items)) =>
-                                    self.stack.push(Value::FrozenSet(items)),
-                                _ => return self.error(ErrorCode::InvalidValue("set() arg".into())),
-                            }
-                        }
-                        Value::Global(Global::Encode) => {
-                            // Byte object encoded as _codecs.encode(x, 'latin1')
-                            match self.resolve(argtuple.pop()) {  // Encoding, always latin1
-                                Some(Value::String(_)) => { }
-                                _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
-                            }
-                            match self.resolve(argtuple.pop()) {
-                                Some(Value::String(s)) => {
-                                    // Now we have to convert the string to latin-1
-                                    // encoded bytes.  It never contains codepoints
-                                    // above 0xff.
-                                    let bytes = s.chars().map(|ch| ch as u8).collect();
-                                    self.stack.push(Value::Bytes(bytes));
-                                }
-                                _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
-                            }
-                        }
-                        other => return Self::stack_error("global reference", &other, self.rdr.pos()),
-                    }
+                    try!(self.reduce_global(global, argtuple));
                 }
 
                 // Unsupported (object building, and memoizing) opcodes
@@ -512,7 +479,7 @@ impl<Iter> Deserializer<Iter>
             // need to provide the reference to the "real" object here, not the
             // MemoRef variant.
             Some(&mut Value::MemoRef(n)) =>
-                self.memo.get_mut(&n).ok_or(Error::Syntax(ErrorCode::MissingMemo(n))),
+                self.memo.get_mut(&n).ok_or_else(|| Error::Syntax(ErrorCode::MissingMemo(n))),
             Some(other_value) => Ok(other_value)
         }
     }
@@ -554,7 +521,7 @@ impl<Iter> Deserializer<Iter>
                 // We can't remove it from the memo here, since we haven't
                 // decoded the whole stream yet and there may be further
                 // references to the value.
-                self.memo.get(&id).map(Clone::clone)
+                self.memo.get(&id).cloned()
             }
             other => other
         }
@@ -723,7 +690,7 @@ impl<Iter> Deserializer<Iter>
     fn decode_long(&self, bytes: Vec<u8>) -> Value {
         // BigInt::from_bytes_le doesn't like a sign bit in the bytes, therefore
         // we have to extract that ourselves and do the two-s complement.
-        let negative = (bytes.len() > 0) && (bytes[bytes.len() - 1] & 0x80 != 0);
+        let negative = !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80 != 0);
         let mut val = BigInt::from_bytes_le(Sign::Plus, &bytes);
         if negative {
             val = val - (BigInt::from(1) << (bytes.len() * 8));
@@ -732,15 +699,52 @@ impl<Iter> Deserializer<Iter>
     }
 
     fn handle_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<()> {
-        match (&*modname, &*globname) {
-            (b"__builtin__", b"set") => self.stack.push(Value::Global(Global::Set)),
-            (b"builtins", b"set") => self.stack.push(Value::Global(Global::Set)),
-            (b"__builtin__", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
-            (b"builtins", b"frozenset") => self.stack.push(Value::Global(Global::Frozenset)),
-            (b"_codecs", b"encode") => self.stack.push(Value::Global(Global::Encode)),
+        let value = match (&*modname, &*globname) {
+            (b"_codecs", b"encode") => Value::Global(Global::Encode),
+            (b"__builtin__", b"set") | (b"builtins", b"set") =>
+                Value::Global(Global::Set),
+            (b"__builtin__", b"frozenset") | (b"builtins", b"frozenset") =>
+                Value::Global(Global::Frozenset),
             _ => return self.error(ErrorCode::UnsupportedGlobal(modname, globname)),
-        }
+        };
+        self.stack.push(value);
         Ok(())
+    }
+
+    fn reduce_global(&mut self, global: Value, mut argtuple: Vec<Value>) -> Result<()> {
+        match global {
+            Value::Global(Global::Set) => {
+                match self.resolve(argtuple.pop()) {
+                    Some(Value::List(items)) => Ok(self.stack.push(Value::Set(items))),
+                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
+                }
+            }
+            Value::Global(Global::Frozenset) => {
+                match self.resolve(argtuple.pop()) {
+                    Some(Value::List(items)) => Ok(self.stack.push(Value::FrozenSet(items))),
+                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
+                }
+            }
+            Value::Global(Global::Encode) => {
+                // Byte object encoded as _codecs.encode(x, 'latin1')
+                match self.resolve(argtuple.pop()) {  // Encoding, always latin1
+                    Some(Value::String(_)) => { }
+                    _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
+                }
+                match self.resolve(argtuple.pop()) {
+                    Some(Value::String(s)) => {
+                        // Now we have to convert the string to latin-1
+                        // encoded bytes.  It never contains codepoints
+                        // above 0xff.
+                        let bytes = s.chars().map(|ch| ch as u8).collect();
+                        self.stack.push(Value::Bytes(bytes));
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
+                }
+            }
+            other => Self::stack_error("global reference", &other, self.rdr.pos()),
+        }
     }
 
     fn stack_error<T>(what: &'static str, value: &Value, pos: usize) -> Result<T> {
@@ -777,18 +781,18 @@ impl<Iter> Deserializer<Iter>
             },
             Value::Set(v) => {
                 let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                      .and_then(|rv| rv.to_hashable())).collect());
+                                                      .and_then(|rv| rv.into_hashable())).collect());
                 Ok(value::Value::Set(new_list))
             },
             Value::FrozenSet(v) => {
                 let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                      .and_then(|rv| rv.to_hashable())).collect());
+                                                      .and_then(|rv| rv.into_hashable())).collect());
                 Ok(value::Value::FrozenSet(new_list))
             },
             Value::Dict(v) => {
                 let mut map = BTreeMap::new();
                 for (key, value) in v {
-                    let real_key = try!(self.deserialize_value(key).and_then(|rv| rv.to_hashable()));
+                    let real_key = try!(self.deserialize_value(key).and_then(|rv| rv.into_hashable()));
                     let real_value = try!(self.deserialize_value(value));
                     map.insert(real_key, real_value);
                 }
@@ -835,9 +839,9 @@ impl<Iter> de::Deserializer for Deserializer<Iter>
             },
             Value::Tuple(v) => {
                 visitor.visit_seq(SeqVisitor {
-                    de: self,
                     len: v.len(),
                     iter: v.into_iter(),
+                    de: self,
                 })
             }
             Value::Set(v) | Value::FrozenSet(v) => {
