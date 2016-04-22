@@ -244,7 +244,7 @@ impl<Iter> Deserializer<Iter>
                     let slice = if line.len() >= 2 && line[0] == line[line.len() - 1] &&
                         (line[0] == b'"' || line[0] == b'\'') {
                             &line[1..line.len() - 1]
-                        } else { &line };
+                        } else { &*line };
                     let string = try!(self.decode_escaped_string(slice));
                     self.stack.push(string);
                 }
