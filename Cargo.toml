@@ -10,7 +10,7 @@ keywords = ["pickle", "python", "serde", "serialization"]
 
 [dependencies]
 serde = "0.7.0"
-byteorder = "0.4.2"
+byteorder = "0.5.1"
 num-bigint = "0.1.32"
 num-traits = "0.1.32"
 

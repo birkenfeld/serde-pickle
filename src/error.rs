@@ -10,7 +10,6 @@ use std::fmt;
 use std::io;
 use std::error;
 use std::result;
-use byteorder;
 use serde::{ser, de};
 
 #[derive(Clone, PartialEq, Debug)]
@@ -103,15 +102,6 @@ pub enum Error {
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Error {
         Error::Io(error)
-    }
-}
-
-impl From<byteorder::Error> for Error {
-    fn from(error: byteorder::Error) -> Error {
-        match error {
-            byteorder::Error::Io(err) => Error::Io(err),
-            byteorder::Error::UnexpectedEOF => Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, error)),
-        }
     }
 }
 
