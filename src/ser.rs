@@ -54,18 +54,8 @@ impl<W: io::Write> Serializer<W> {
             HashableValue::String(ref s) => self.serialize_str(s),
             HashableValue::Int(ref i) => self.serialize_bigint(i),
             HashableValue::FrozenSet(ref s) => self.serialize_set(s, b"frozenset"),
-            HashableValue::Tuple(ref t) => {
-                if t.is_empty() {
-                    self.write_opcode(EMPTY_TUPLE)
-                } else {
-                    try!(self.write_opcode(MARK));
-                    for item in t.iter() {
-                        try!(self.serialize_hashable_value(item));
-                    }
-                    try!(self.write_opcode(TUPLE));
-                    Ok(())
-                }
-            },
+            HashableValue::Tuple(ref t) =>
+                self.serialize_tuplevalue(t, |slf, v| slf.serialize_hashable_value(v)),
         }
     }
 
@@ -110,16 +100,7 @@ impl<W: io::Write> Serializer<W> {
                 self.serialize_bigint(i)
             }
             Value::Tuple(ref t) => {
-                if t.is_empty() {
-                    self.write_opcode(EMPTY_TUPLE)
-                } else {
-                    try!(self.write_opcode(MARK));
-                    for item in t.iter() {
-                        try!(self.serialize_value(item));
-                    }
-                    try!(self.write_opcode(TUPLE));
-                    Ok(())
-                }
+                self.serialize_tuplevalue(t, |slf, v| slf.serialize_value(v))
             },
             Value::Set(ref s) => {
                 self.serialize_set(s, b"set")
@@ -159,6 +140,33 @@ impl<W: io::Write> Serializer<W> {
         self.writer.write_all(&bytes).map_err(From::from)
     }
 
+    fn serialize_tuplevalue<T, F>(&mut self, t: &[T], f: F) -> Result<()>
+        where F: Fn(&mut Self, &T) -> Result<()>
+    {
+        if t.is_empty() {
+            self.write_opcode(EMPTY_TUPLE)
+        } else if t.len() == 1 {
+            try!(f(self, &t[0]));
+            self.write_opcode(TUPLE1)
+        } else if t.len() == 2 {
+            try!(f(self, &t[0]));
+            try!(f(self, &t[1]));
+            self.write_opcode(TUPLE2)
+        } else if t.len() == 3 {
+            try!(f(self, &t[0]));
+            try!(f(self, &t[1]));
+            try!(f(self, &t[2]));
+            self.write_opcode(TUPLE3)
+        } else {
+            try!(self.write_opcode(MARK));
+            for item in t.iter() {
+                try!(f(self, item));
+            }
+            try!(self.write_opcode(TUPLE));
+            Ok(())
+        }
+    }
+
     fn serialize_set(&mut self, items: &BTreeSet<HashableValue>, name: &[u8]) -> Result<()> {
         try!(self.write_opcode(GLOBAL));
         if self.use_proto_3 {
@@ -175,8 +183,7 @@ impl<W: io::Write> Serializer<W> {
                 try!(self.write_opcode(APPENDS));
                 try!(self.write_opcode(MARK));
             }
-            let item = item.clone().into_value(); // XXX
-            try!(self.serialize_value(&item));
+            try!(self.serialize_hashable_value(&item));
         }
         try!(self.write_opcode(APPENDS));
         try!(self.write_opcode(TUPLE1));
