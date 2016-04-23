@@ -311,7 +311,7 @@ mod benches {
 
     use byteorder::{LittleEndian, WriteBytesExt};
     use self::test::Bencher;
-    use value_from_slice;
+    use {Value, value_from_slice, value_to_vec};
 
     #[bench]
     fn unpickle_list(b: &mut Bencher) {
@@ -324,20 +324,34 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.extend(b"e.");
-        b.iter(|| value_from_slice(&buffer));
+        b.bytes = buffer.len() as u64;
+        b.iter(|| value_from_slice(&buffer).unwrap());
     }
 
     #[bench]
     fn unpickle_nested_list(b: &mut Bencher) {
         let mut buffer = b"\x80\x02".to_vec();
-        for i in 0..1000 {
+        for i in 0..501 {
             buffer.extend(b"]r");
             buffer.write_u32::<LittleEndian>(i).unwrap();
         }
-        for _ in 0..1000 {
+        for _ in 0..500 {
             buffer.push(b'a');
         }
         buffer.push(b'.');
-        b.iter(|| value_from_slice(&buffer));
+        b.bytes = buffer.len() as u64;
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
+    fn pickle_list(b: &mut Bencher) {
+        let mut list = Vec::with_capacity(1000);
+        for i in 0..1000 {
+            list.push(pyobj!(l=[i=i]));
+        }
+        let list = Value::List(list);
+        let buffer = value_to_vec(&list, true).unwrap();
+        b.bytes = buffer.len() as u64;
+        b.iter(|| value_to_vec(&list, true).unwrap());
     }
 }
