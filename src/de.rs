@@ -15,6 +15,7 @@ use std::mem;
 use std::str;
 use std::char;
 use std::vec;
+use std::io::{BufReader, BufRead, Read};
 use std::str::FromStr;
 use std::collections::BTreeMap;
 use num_bigint::{BigInt, Sign};
@@ -62,34 +63,10 @@ enum Value {
     Dict(Vec<(Value, Value)>),
 }
 
-struct CharIter<Iter: Iterator<Item=io::Result<u8>>> {
-    rdr: Iter,
-    pos: usize,
-}
-
-impl<Iter: Iterator<Item=io::Result<u8>>> Iterator for CharIter<Iter> {
-    type Item = io::Result<u8>;
-    fn next(&mut self) -> Option<io::Result<u8>> {
-        self.pos += 1;
-        self.rdr.next()
-    }
-}
-
-impl<Iter: Iterator<Item=io::Result<u8>>> CharIter<Iter> {
-    fn new(rdr: Iter) -> CharIter<Iter> {
-        CharIter {
-            rdr: rdr,
-            pos: 0,
-        }
-    }
-
-    fn pos(&self) -> usize { self.pos }
-}
-
 /// Decodes pickle streams into values.
-pub struct Deserializer<Iter: Iterator<Item=io::Result<u8>>> {
-    rdr: CharIter<Iter>,
-    ch: Option<u8>,
+pub struct Deserializer<R: Read> {
+    rdr: BufReader<R>,
+    pos: usize,
     value: Option<Value>,               // next value to deserialize
     memo: BTreeMap<MemoId, Value>,      // pickle memo
     memo_refs: BTreeMap<MemoId, i32>,   // number of references to memo items
@@ -98,16 +75,14 @@ pub struct Deserializer<Iter: Iterator<Item=io::Result<u8>>> {
     decode_strings: bool,               // protocol specific switch
 }
 
-impl<Iter> Deserializer<Iter>
-    where Iter: Iterator<Item=io::Result<u8>>
-{
+impl<R: Read> Deserializer<R> {
     /// Construct a new Deserializer.  The second argument decides whether
     /// strings (STRING opcodes, saved only by protocols 0-2) are decoded as
     /// UTF-8 strings or left as byte vectors.
-    pub fn new(rdr: Iter, decode_strings: bool) -> Deserializer<Iter> {
+    pub fn new(rdr: R, decode_strings: bool) -> Deserializer<R> {
         Deserializer {
-            rdr: CharIter::new(rdr),
-            ch: None,
+            rdr: BufReader::new(rdr),
+            pos: 0,
             value: None,
             memo: BTreeMap::new(),
             memo_refs: BTreeMap::new(),
@@ -123,18 +98,6 @@ impl<Iter> Deserializer<Iter>
         match self.value.take() {
             Some(v) => Ok(v),
             None => self.parse_value(),
-        }
-    }
-
-    /// Assert that we reached the end of the stream.
-    pub fn end(&mut self) -> Result<()> {
-        match self.ch.take() {
-            Some(_) => self.error(ErrorCode::TrailingBytes),
-            None => match self.rdr.next() {
-                Some(Err(err)) => Err(Error::Io(err)),
-                Some(Ok(_)) => self.error(ErrorCode::TrailingBytes),
-                None => Ok(())
-            }
         }
     }
 
@@ -382,11 +345,11 @@ impl<Iter> Deserializer<Iter>
                 STACK_GLOBAL => {
                     let globname = match try!(self.pop()) {
                         Value::String(string) => string.into_bytes(),
-                        other => return Self::stack_error("string", &other, self.rdr.pos()),
+                        other => return Self::stack_error("string", &other, self.pos),
                     };
                     let modname = match try!(self.pop()) {
                         Value::String(string) => string.into_bytes(),
-                        other => return Self::stack_error("string", &other, self.rdr.pos()),
+                        other => return Self::stack_error("string", &other, self.pos),
                     };
                     let value = try!(self.decode_global(modname, globname));
                     self.stack.push(value);
@@ -394,7 +357,7 @@ impl<Iter> Deserializer<Iter>
                 REDUCE => {
                     let argtuple = match try!(self.pop_resolve()) {
                         Value::Tuple(args) => args,
-                        other => return Self::stack_error("tuple", &other, self.rdr.pos()),
+                        other => return Self::stack_error("tuple", &other, self.pos),
                     };
                     let global = try!(self.pop_resolve());
                     try!(self.reduce_global(global, argtuple));
@@ -426,7 +389,7 @@ impl<Iter> Deserializer<Iter>
     // Mutably view the stack top item.
     fn top(&mut self) -> Result<&mut Value> {
         match self.stack.last_mut() {
-            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.rdr.pos())),
+            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.pos)),
             // Since some operations like APPEND do things to the stack top, we
             // need to provide the reference to the "real" object here, not the
             // MemoRef variant.
@@ -458,7 +421,7 @@ impl<Iter> Deserializer<Iter>
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
             item = try!(self.memo.get(&id).ok_or(
-                Error::Eval(ErrorCode::MissingMemo(id), self.rdr.pos()))).clone();
+                Error::Eval(ErrorCode::MissingMemo(id), self.pos))).clone();
         }
         self.memo.insert(memo_id, item);
         self.push_memo_ref(memo_id);
@@ -506,32 +469,52 @@ impl<Iter> Deserializer<Iter>
         }
     }
 
-    fn read_byte(&mut self) -> Result<u8> {
-        match self.ch.take() {
-            Some(ch) => Ok(ch),
-            None => match self.rdr.next() {
-                Some(Err(err)) => Err(Error::Io(err)),
-                Some(Ok(ch)) => Ok(ch),
-                None => self.error(ErrorCode::EOFWhileParsing)
-            }
+    /// Assert that we reached the end of the stream.
+    pub fn end(&mut self) -> Result<()> {
+        let mut buf = [0];
+        match self.rdr.read(&mut buf) {
+            Err(err) => Err(Error::Io(err)),
+            Ok(1) => self.error(ErrorCode::TrailingBytes),
+            _ => Ok(())
         }
     }
 
     fn read_line(&mut self) -> Result<Vec<u8>> {
-        let mut result = Vec::with_capacity(16);
-        loop {
-            match try!(self.read_byte()) {
-                b'\n' => {
-                    if result.last() == Some(&b'\r') { result.pop(); }
-                    return Ok(result)
-                }
-                ch    => result.push(ch)
-            }
+        let mut buf = Vec::with_capacity(16);
+        match self.rdr.read_until(b'\n', &mut buf) {
+            Ok(_) => {
+                self.pos += buf.len();
+                if buf.last() == Some(&b'\r') { buf.pop(); }
+                Ok(buf)
+            },
+            Err(err) => Err(Error::Io(err))
         }
     }
 
-    fn read_bytes(&mut self, n: u64) -> Result<Vec<u8>> {
-        (0..n).map(|_| self.read_byte()).collect()
+    #[inline]
+    fn read_byte(&mut self) -> Result<u8> {
+        let mut buf = [0];
+        match self.rdr.read(&mut buf) {
+            Ok(1) => {
+                self.pos += 1;
+                Ok(buf[0])
+            },
+            Err(err) => Err(Error::Io(err)),
+            _ => self.error(ErrorCode::EOFWhileParsing)
+        }
+    }
+
+    #[inline]
+    fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        let mut buf = vec![0; n];
+        match self.rdr.read(&mut buf) {
+            Ok(m) if m == n => {
+                self.pos += n;
+                Ok(buf)
+            },
+            Err(err) => Err(Error::Io(err)),
+            _ => self.error(ErrorCode::EOFWhileParsing)
+        }
     }
 
     fn read_i32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
@@ -539,23 +522,23 @@ impl<Iter> Deserializer<Iter>
         match LittleEndian::read_i32(&lenbytes) {
             0          => Ok(vec![]),
             l if l < 0 => self.error(ErrorCode::NegativeLength),
-            l          => self.read_bytes(l as u64)
+            l          => self.read_bytes(l as usize)
         }
     }
 
     fn read_u64_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
         let lenbytes = try!(self.read_bytes(8));
-        self.read_bytes(LittleEndian::read_u64(&lenbytes))
+        self.read_bytes(LittleEndian::read_u64(&lenbytes) as usize)
     }
 
     fn read_u32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
         let lenbytes = try!(self.read_bytes(4));
-        self.read_bytes(LittleEndian::read_u32(&lenbytes) as u64)
+        self.read_bytes(LittleEndian::read_u32(&lenbytes) as usize)
     }
 
     fn read_u8_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
         let lenbyte = try!(self.read_byte());
-        self.read_bytes(lenbyte as u64)
+        self.read_bytes(lenbyte as usize)
     }
 
     // Parse an expected ASCII literal from the stream or raise an error.
@@ -697,7 +680,7 @@ impl<Iter> Deserializer<Iter>
 
     // Modify the stack-top list.
     fn modify_list<F>(&mut self, f: F) -> Result<()> where F: FnOnce(&mut Vec<Value>) {
-        let pos = self.rdr.pos();
+        let pos = self.pos;
         let top = try!(self.top());
         if let Value::List(ref mut list) = *top {
             Ok(f(list))
@@ -721,7 +704,7 @@ impl<Iter> Deserializer<Iter>
     fn modify_dict<F>(&mut self, f: F) -> Result<()>
         where F: FnOnce(&mut Vec<(Value, Value)>)
     {
-        let pos = self.rdr.pos();
+        let pos = self.pos;
         let top = try!(self.top());
         if let Value::Dict(ref mut dict) = *top {
             Ok(f(dict))
@@ -734,7 +717,7 @@ impl<Iter> Deserializer<Iter>
     fn modify_set<F>(&mut self, f: F) -> Result<()>
         where F: FnOnce(&mut Vec<Value>)
     {
-        let pos = self.rdr.pos();
+        let pos = self.pos;
         let top = try!(self.top());
         if let Value::Set(ref mut set) = *top {
             Ok(f(set))
@@ -789,7 +772,7 @@ impl<Iter> Deserializer<Iter>
                     _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
                 }
             }
-            other => Self::stack_error("global reference", &other, self.rdr.pos()),
+            other => Self::stack_error("global reference", &other, self.pos),
         }
     }
 
@@ -801,7 +784,7 @@ impl<Iter> Deserializer<Iter>
 
     #[inline]
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
-        Err(Error::Eval(reason, self.rdr.pos()))
+        Err(Error::Eval(reason, self.pos))
     }
 
     fn deserialize_value(&mut self, value: Value) -> Result<value::Value> {
@@ -854,9 +837,7 @@ impl<Iter> Deserializer<Iter>
     }
 }
 
-impl<Iter> de::Deserializer for Deserializer<Iter>
-    where Iter: Iterator<Item=io::Result<u8>>
-{
+impl<R: Read> de::Deserializer for Deserializer<R> {
     type Error = Error;
 
     fn deserialize<V>(&mut self, mut visitor: V) -> Result<V::Value>
@@ -951,9 +932,7 @@ impl<Iter> de::Deserializer for Deserializer<Iter>
     }
 }
 
-impl<Iter> de::VariantVisitor for Deserializer<Iter>
-    where Iter: Iterator<Item=io::Result<u8>>
-{
+impl<R: Read> de::VariantVisitor for Deserializer<R> {
     type Error = Error;
 
     fn visit_variant<V>(&mut self) -> Result<V> where V: de::Deserialize {
@@ -993,17 +972,13 @@ impl<Iter> de::VariantVisitor for Deserializer<Iter>
     }
 }
 
-struct SeqVisitor<'a, Iter>
-    where Iter: Iterator<Item=io::Result<u8>> + 'a
-{
-    de: &'a mut Deserializer<Iter>,
+struct SeqVisitor<'a, R: Read + 'a> {
+    de: &'a mut Deserializer<R>,
     iter: vec::IntoIter<Value>,
     len: usize,
 }
 
-impl<'a, Iter> de::SeqVisitor for SeqVisitor<'a, Iter>
-    where Iter: Iterator<Item=io::Result<u8>> + 'a
-{
+impl<'a, R: Read> de::SeqVisitor for SeqVisitor<'a, R> {
     type Error = Error;
 
     fn visit<T>(&mut self) -> Result<Option<T>>
@@ -1032,18 +1007,14 @@ impl<'a, Iter> de::SeqVisitor for SeqVisitor<'a, Iter>
     }
 }
 
-struct MapVisitor<'a, Iter>
-    where Iter: Iterator<Item=io::Result<u8>> + 'a
-{
-    de: &'a mut Deserializer<Iter>,
+struct MapVisitor<'a, R: Read + 'a> {
+    de: &'a mut Deserializer<R>,
     iter: vec::IntoIter<(Value, Value)>,
     value: Option<Value>,
     len: usize,
 }
 
-impl<'a, Iter> de::MapVisitor for MapVisitor<'a, Iter>
-    where Iter: Iterator<Item=io::Result<u8>> + 'a
-{
+impl<'a, R: Read> de::MapVisitor for MapVisitor<'a, R> {
     type Error = Error;
 
     fn visit_key<T>(&mut self) -> Result<Option<T>>
@@ -1088,46 +1059,30 @@ impl<'a, Iter> de::MapVisitor for MapVisitor<'a, Iter>
 }
 
 
-/// Decodes a value directly from an iterator.
-pub fn from_iter<I, T>(iter: I) -> Result<T>
-    where I: Iterator<Item=io::Result<u8>>,
-          T: de::Deserialize
-{
-    let mut de = Deserializer::new(iter, false);
+/// Decodes a value from a `std::io::Read`.
+pub fn from_reader<R: io::Read, T: de::Deserialize>(rdr: R) -> Result<T> {
+    let mut de = Deserializer::new(rdr, false);
     let value = try!(de::Deserialize::deserialize(&mut de));
     // Make sure the whole stream has been consumed.
     try!(de.end());
     Ok(value)
 }
 
-/// Decodes a value from a `std::io::Read`.
-pub fn from_reader<R: io::Read, T: de::Deserialize>(rdr: R) -> Result<T> {
-    from_iter(rdr.bytes())
-}
-
 /// Decodes a value from a byte slice `&[u8]`.
 pub fn from_slice<T: de::Deserialize>(v: &[u8]) -> Result<T> {
-    from_iter(v.iter().map(|byte| Ok(*byte)))
-}
-
-/// Decodes a value directly from an iterator.
-pub fn value_from_iter<I>(iter: I) -> Result<value::Value>
-    where I: Iterator<Item=io::Result<u8>>
-{
-    let mut de = Deserializer::new(iter, false);
-    let intermediate_value = try!(de.parse_value());
-    let value = try!(de.deserialize_value(intermediate_value));
-    // Make sure the whole stream has been consumed.
-    try!(de.end());
-    Ok(value)
+    from_reader(io::Cursor::new(v))
 }
 
 /// Decodes a value from a `std::io::Read`.
 pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
-    value_from_iter(rdr.bytes())
+    let mut de = Deserializer::new(rdr, false);
+    let intermediate_value = try!(de.parse_value());
+    let value = try!(de.deserialize_value(intermediate_value));
+    try!(de.end());
+    Ok(value)
 }
 
 /// Decodes a value from a byte slice `&[u8]`.
 pub fn value_from_slice(v: &[u8]) -> Result<value::Value> {
-    value_from_iter(v.iter().map(|byte| Ok(*byte)))
+    value_from_reader(io::Cursor::new(v))
 }

@@ -60,10 +60,8 @@ pub use self::ser::{
 
 pub use self::de::{
     Deserializer,
-    from_iter,
     from_reader,
     from_slice,
-    value_from_iter,
     value_from_reader,
     value_from_slice,
 };
