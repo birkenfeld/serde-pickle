@@ -49,6 +49,7 @@ extern crate serde;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate byteorder;
+extern crate iter_read;
 
 pub use self::ser::{
     Serializer,
@@ -62,8 +63,10 @@ pub use self::de::{
     Deserializer,
     from_reader,
     from_slice,
+    from_iter,
     value_from_reader,
     value_from_slice,
+    value_from_iter
 };
 
 pub use self::value::{

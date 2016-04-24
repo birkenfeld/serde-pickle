@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use byteorder::{ByteOrder, BigEndian, LittleEndian};
+use iter_read::{IterRead, IterReadItem};
 use serde::de;
 
 use super::error::{Error, ErrorCode, Result};
@@ -1073,6 +1074,12 @@ pub fn from_slice<T: de::Deserialize>(v: &[u8]) -> Result<T> {
     from_reader(io::Cursor::new(v))
 }
 
+/// Decodes a value from any iterator supported as a reader.
+pub fn from_iter<E: IterReadItem, I: Iterator<Item=E>,
+                 T: de::Deserialize>(it: I) -> Result<T> {
+    from_reader(IterRead::new(it))
+}
+
 /// Decodes a value from a `std::io::Read`.
 pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
     let mut de = Deserializer::new(rdr, false);
@@ -1085,4 +1092,9 @@ pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
 /// Decodes a value from a byte slice `&[u8]`.
 pub fn value_from_slice(v: &[u8]) -> Result<value::Value> {
     value_from_reader(io::Cursor::new(v))
+}
+
+/// Decodes a value from any iterator supported as a reader.
+pub fn value_from_iter<E: IterReadItem, I: Iterator<Item=E>>(it: I) -> Result<value::Value> {
+    value_from_reader(IterRead::new(it))
 }

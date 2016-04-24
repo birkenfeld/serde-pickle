@@ -13,6 +13,7 @@ serde = "0.7.0"
 byteorder = "0.5.1"
 num-bigint = "0.1.32"
 num-traits = "0.1.32"
+iter-read = "0.1.0"
 
 # For the example binary and the test suite.
 [dev-dependencies]
