@@ -343,11 +343,11 @@ mod benches {
     #[bench]
     fn unpickle_nested_list(b: &mut Bencher) {
         let mut buffer = b"\x80\x02".to_vec();
-        for i in 0..301 {
+        for i in 0..201 {
             buffer.extend(b"]r");
             buffer.write_u32::<LittleEndian>(i).unwrap();
         }
-        for _ in 0..300 {
+        for _ in 0..200 {
             buffer.push(b'a');
         }
         buffer.push(b'.');

@@ -485,6 +485,7 @@ impl<R: Read> Deserializer<R> {
         match self.rdr.read_until(b'\n', &mut buf) {
             Ok(_) => {
                 self.pos += buf.len();
+                buf.pop(); // remove newline
                 if buf.last() == Some(&b'\r') { buf.pop(); }
                 Ok(buf)
             },
@@ -496,25 +497,19 @@ impl<R: Read> Deserializer<R> {
     fn read_byte(&mut self) -> Result<u8> {
         let mut buf = [0];
         match self.rdr.read(&mut buf) {
-            Ok(1) => {
-                self.pos += 1;
-                Ok(buf[0])
-            },
+            Ok(1) => { self.pos += 1; Ok(buf[0]) },
+            Ok(_) => self.error(ErrorCode::EOFWhileParsing),
             Err(err) => Err(Error::Io(err)),
-            _ => self.error(ErrorCode::EOFWhileParsing)
         }
     }
 
     #[inline]
     fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
-        let mut buf = vec![0; n];
-        match self.rdr.read(&mut buf) {
-            Ok(m) if m == n => {
-                self.pos += n;
-                Ok(buf)
-            },
+        let mut buf = Vec::new();
+        match self.rdr.by_ref().take(n as u64).read_to_end(&mut buf) {
+            Ok(m) if n == m => { self.pos += n; Ok(buf) },
+            Ok(_) => self.error(ErrorCode::EOFWhileParsing),
             Err(err) => Err(Error::Io(err)),
-            _ => self.error(ErrorCode::EOFWhileParsing)
         }
     }
 
