@@ -329,13 +329,25 @@ mod benches {
     }
 
     #[bench]
+    fn unpickle_simple_tuple(b: &mut Bencher) {
+        let mut list = Vec::with_capacity(1000);
+        for i in 0..1000 {
+            list.push(pyobj!(i=i));
+        }
+        let tuple = Value::Tuple(list);
+        let buffer = value_to_vec(&tuple, true).unwrap();
+        b.bytes = buffer.len() as u64;
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
     fn unpickle_nested_list(b: &mut Bencher) {
         let mut buffer = b"\x80\x02".to_vec();
-        for i in 0..501 {
+        for i in 0..301 {
             buffer.extend(b"]r");
             buffer.write_u32::<LittleEndian>(i).unwrap();
         }
-        for _ in 0..500 {
+        for _ in 0..300 {
             buffer.push(b'a');
         }
         buffer.push(b'.');
