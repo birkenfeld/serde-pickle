@@ -68,12 +68,11 @@ enum Value {
 pub struct Deserializer<R: Read> {
     rdr: BufReader<R>,
     pos: usize,
-    value: Option<Value>,               // next value to deserialize
-    memo: BTreeMap<MemoId, Value>,      // pickle memo
-    memo_refs: BTreeMap<MemoId, i32>,   // number of references to memo items
-    stack: Vec<Value>,                  // topmost items on the stack
-    stacks: Vec<Vec<Value>>,            // items further down the stack, between MARKs
-    decode_strings: bool,               // protocol specific switch
+    value: Option<Value>,                  // next value to deserialize
+    memo: BTreeMap<MemoId, (Value, i32)>,  // pickle memo (value, number of refs)
+    stack: Vec<Value>,                     // topmost items on the stack
+    stacks: Vec<Vec<Value>>,               // items further down the stack, between MARKs
+    decode_strings: bool,                  // protocol specific switch
 }
 
 impl<R: Read> Deserializer<R> {
@@ -86,7 +85,6 @@ impl<R: Read> Deserializer<R> {
             pos: 0,
             value: None,
             memo: BTreeMap::new(),
-            memo_refs: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
             decode_strings: decode_strings,
@@ -156,16 +154,16 @@ impl<R: Read> Deserializer<R> {
                 GET => {
                     let bytes = try!(self.read_line());
                     let memo_id = try!(self.parse_ascii(bytes));
-                    self.push_memo_ref(memo_id);
+                    try!(self.push_memo_ref(memo_id));
                 }
                 BINGET => {
                     let memo_id = try!(self.read_byte()) as MemoId;
-                    self.push_memo_ref(memo_id);
+                    try!(self.push_memo_ref(memo_id));
                 }
                 LONG_BINGET => {
                     let bytes = try!(self.read_bytes(4));
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    self.push_memo_ref(memo_id as MemoId);
+                    try!(self.push_memo_ref(memo_id as MemoId));
                 }
 
                 // Singletons
@@ -395,7 +393,8 @@ impl<R: Read> Deserializer<R> {
             // need to provide the reference to the "real" object here, not the
             // MemoRef variant.
             Some(&mut Value::MemoRef(n)) =>
-                self.memo.get_mut(&n).ok_or_else(|| Error::Syntax(ErrorCode::MissingMemo(n))),
+                self.memo.get_mut(&n).map(|&mut (ref mut v, _)| v)
+                                     .ok_or_else(|| Error::Syntax(ErrorCode::MissingMemo(n))),
             Some(other_value) => Ok(other_value)
         }
     }
@@ -409,10 +408,12 @@ impl<R: Read> Deserializer<R> {
     }
 
     // Pushes a memo reference on the stack, and increases the usage counter.
-    fn push_memo_ref(&mut self, memo_id: MemoId) {
+    fn push_memo_ref(&mut self, memo_id: MemoId) -> Result<()> {
         self.stack.push(Value::MemoRef(memo_id));
-        let count = self.memo_refs.entry(memo_id).or_insert(0);
-        *count = *count + 1;
+        match self.memo.get_mut(&memo_id) {
+            None => Err(Error::Eval(ErrorCode::MissingMemo(memo_id), self.pos)),
+            Some(&mut (_, ref mut count)) => { *count = *count + 1; Ok(()) }
+        }
     }
 
     // Memoize the current stack top with the given ID.  Moves the actual
@@ -421,11 +422,11 @@ impl<R: Read> Deserializer<R> {
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
-            item = try!(self.memo.get(&id).ok_or(
-                Error::Eval(ErrorCode::MissingMemo(id), self.pos))).clone();
+            item = try!(self.memo.get(&id).map(|&(ref v, _)| v.clone()).ok_or(
+                Error::Eval(ErrorCode::MissingMemo(id), self.pos)));
         }
-        self.memo.insert(memo_id, item);
-        self.push_memo_ref(memo_id);
+        self.memo.insert(memo_id, (item, 1));
+        self.stack.push(Value::MemoRef(memo_id));
         Ok(())
     }
 
@@ -433,14 +434,14 @@ impl<R: Read> Deserializer<R> {
     fn resolve(&mut self, maybe_memo: Option<Value>) -> Option<Value> {
         match maybe_memo {
             Some(Value::MemoRef(id)) => {
-                if let Some(count) = self.memo_refs.get_mut(&id) {
+                self.memo.get_mut(&id).map(|&mut (ref val, ref mut count)| {
+                    // We can't remove it from the memo here, since we haven't
+                    // decoded the whole stream yet and there may be further
+                    // references to the value.
                     *count = *count - 1;
-                }
-                // We can't remove it from the memo here, since we haven't
-                // decoded the whole stream yet and there may be further
-                // references to the value.
-                self.memo.get(&id).cloned()
-            }
+                    val.clone()
+                })
+            },
             other => other
         }
     }
@@ -452,20 +453,17 @@ impl<R: Read> Deserializer<R> {
         // Take the value from the memo while visiting it.  This prevents us
         // from trying to depickle recursive structures, which we can't do
         // because our Values aren't references.
-        let value = match self.memo.remove(&id) {
-            Some(value) => value,
+        let (value, mut count) = match self.memo.remove(&id) {
+            Some(entry) => entry,
             None => return Err(Error::Syntax(ErrorCode::Recursive)),
         };
-        let new_count = if let Some(count) = self.memo_refs.get_mut(&id) {
-            *count = *count - 1;
-            *count
-        } else { 0 };
-        if new_count <= 0 {
+        count -= 1;
+        if count <= 0 {
             f(self, value)
             // No need to put it back.
         } else {
             let result = f(self, value.clone());
-            self.memo.insert(id, value);
+            self.memo.insert(id, (value, count));
             result
         }
     }
