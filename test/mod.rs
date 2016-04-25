@@ -309,22 +309,84 @@ mod value_tests {
 mod benches {
     extern crate test;
 
+    use std::collections::BTreeMap;
     use byteorder::{LittleEndian, WriteBytesExt};
     use self::test::Bencher;
-    use {Value, value_from_slice, value_to_vec};
+    use {Value, HashableValue, value_from_slice, value_to_vec};
 
     #[bench]
     fn unpickle_list(b: &mut Bencher) {
+        // Creates [[0], [1], [2], ...]
+        // Start a list
         let mut buffer = b"\x80\x02]q\x00(".to_vec();
         for i in 0..1000 {
+            // Insert an empty list (memoized)
             buffer.extend(b"]r");
             buffer.write_u32::<LittleEndian>(i + 1).unwrap();
+            // Insert i as an integer
             buffer.push(b'M');
+            buffer.write_u16::<LittleEndian>(i as u16).unwrap();
+            // Append
+            buffer.push(b'a');
+        }
+        // Append all
+        buffer.extend(b"e.");
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
+    fn unpickle_list_no_memo(b: &mut Bencher) {
+        // Same as above, but doesn't use the memo
+        let mut buffer = b"\x80\x02](".to_vec();
+        for i in 0..1000 {
+            buffer.extend(b"]M");
             buffer.write_u16::<LittleEndian>(i as u16).unwrap();
             buffer.push(b'a');
         }
         buffer.extend(b"e.");
-        b.bytes = buffer.len() as u64;
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
+    fn unpickle_dict(b: &mut Bencher) {
+        // Creates {0: "string", 1: "string", ...}
+        let mut buffer = b"\x80\x03}q\x00(K\x00".to_vec();
+        buffer.extend(b"X\x06\x00\x00\x00stringq\x01");
+        for i in 0..1000 {
+            buffer.push(b'M');
+            buffer.write_u16::<LittleEndian>(i as u16).unwrap();
+            buffer.extend(b"h\x01");
+        }
+        buffer.extend(b"u.");
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
+    fn unpickle_nested_list(b: &mut Bencher) {
+        // Creates [[[[...]]]]
+        let mut buffer = b"\x80\x02".to_vec();
+        for i in 0..201 {
+            buffer.extend(b"]r");
+            buffer.write_u32::<LittleEndian>(i).unwrap();
+        }
+        for _ in 0..200 {
+            buffer.push(b'a');
+        }
+        buffer.push(b'.');
+        b.iter(|| value_from_slice(&buffer).unwrap());
+    }
+
+    #[bench]
+    fn unpickle_nested_list_no_memo(b: &mut Bencher) {
+        // Creates [[[[...]]]] without using memo
+        let mut buffer = b"\x80\x02".to_vec();
+        for _ in 0..201 {
+            buffer.extend(b"]");
+        }
+        for _ in 0..200 {
+            buffer.push(b'a');
+        }
+        buffer.push(b'.');
         b.iter(|| value_from_slice(&buffer).unwrap());
     }
 
@@ -336,22 +398,6 @@ mod benches {
         }
         let tuple = Value::Tuple(list);
         let buffer = value_to_vec(&tuple, true).unwrap();
-        b.bytes = buffer.len() as u64;
-        b.iter(|| value_from_slice(&buffer).unwrap());
-    }
-
-    #[bench]
-    fn unpickle_nested_list(b: &mut Bencher) {
-        let mut buffer = b"\x80\x02".to_vec();
-        for i in 0..201 {
-            buffer.extend(b"]r");
-            buffer.write_u32::<LittleEndian>(i).unwrap();
-        }
-        for _ in 0..200 {
-            buffer.push(b'a');
-        }
-        buffer.push(b'.');
-        b.bytes = buffer.len() as u64;
         b.iter(|| value_from_slice(&buffer).unwrap());
     }
 
@@ -362,8 +408,16 @@ mod benches {
             list.push(pyobj!(l=[i=i]));
         }
         let list = Value::List(list);
-        let buffer = value_to_vec(&list, true).unwrap();
-        b.bytes = buffer.len() as u64;
         b.iter(|| value_to_vec(&list, true).unwrap());
+    }
+
+    #[bench]
+    fn pickle_dict(b: &mut Bencher) {
+        let mut dict = BTreeMap::new();
+        for i in 0..1000 {
+            dict.insert(hpyobj!(i=i), pyobj!(l=[i=i]));
+        }
+        let dict = Value::Dict(dict);
+        b.iter(|| value_to_vec(&dict, true).unwrap());
     }
 }
