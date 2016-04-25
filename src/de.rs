@@ -290,7 +290,7 @@ impl<R: Read> Deserializer<R> {
                 }
 
                 // Lists
-                EMPTY_LIST => self.stack.push(Value::List(vec![])),
+                EMPTY_LIST => self.stack.push(Value::List(Vec::new())),
                 LIST => {
                     let items = try!(self.pop_mark());
                     self.stack.push(Value::List(items));
@@ -385,20 +385,6 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
-    // Mutably view the stack top item.
-    fn top(&mut self) -> Result<&mut Value> {
-        match self.stack.last_mut() {
-            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.pos)),
-            // Since some operations like APPEND do things to the stack top, we
-            // need to provide the reference to the "real" object here, not the
-            // MemoRef variant.
-            Some(&mut Value::MemoRef(n)) =>
-                self.memo.get_mut(&n).map(|&mut (ref mut v, _)| v)
-                                     .ok_or_else(|| Error::Syntax(ErrorCode::MissingMemo(n))),
-            Some(other_value) => Ok(other_value)
-        }
-    }
-
     // Pop all topmost stack items until the next MARK.
     fn pop_mark(&mut self) -> Result<Vec<Value>> {
         match self.stacks.pop() {
@@ -407,12 +393,27 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    // Mutably view the stack top item.
+    fn top(&mut self) -> Result<&mut Value> {
+        match self.stack.last_mut() {
+            // Since some operations like APPEND do things to the stack top, we
+            // need to provide the reference to the "real" object here, not the
+            // MemoRef variant.
+            Some(&mut Value::MemoRef(n)) =>
+                self.memo.get_mut(&n)
+                         .map(|&mut (ref mut v, _)| v)
+                         .ok_or_else(|| Error::Syntax(ErrorCode::MissingMemo(n))),
+            Some(other_value) => Ok(other_value),
+            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.pos)),
+        }
+    }
+
     // Pushes a memo reference on the stack, and increases the usage counter.
     fn push_memo_ref(&mut self, memo_id: MemoId) -> Result<()> {
         self.stack.push(Value::MemoRef(memo_id));
         match self.memo.get_mut(&memo_id) {
-            None => Err(Error::Eval(ErrorCode::MissingMemo(memo_id), self.pos)),
             Some(&mut (_, ref mut count)) => { *count = *count + 1; Ok(()) }
+            None => Err(Error::Eval(ErrorCode::MissingMemo(memo_id), self.pos)),
         }
     }
 
@@ -422,8 +423,10 @@ impl<R: Read> Deserializer<R> {
         let mut item = try!(self.pop());
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
-            item = try!(self.memo.get(&id).map(|&(ref v, _)| v.clone()).ok_or(
-                Error::Eval(ErrorCode::MissingMemo(id), self.pos)));
+            item = match self.memo.get(&id) {
+                Some(&(ref v, _)) => v.clone(),
+                None => return Err(Error::Eval(ErrorCode::MissingMemo(id), self.pos)),
+            };
         }
         self.memo.insert(memo_id, (item, 1));
         self.stack.push(Value::MemoRef(memo_id));
@@ -770,13 +773,11 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
-    #[inline]
     fn stack_error<T>(what: &'static str, value: &Value, pos: usize) -> Result<T> {
         let it = format!("{:?}", value);
         Err(Error::Eval(ErrorCode::InvalidStackTop(what, it), pos))
     }
 
-    #[inline]
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
         Err(Error::Eval(reason, self.pos))
     }
@@ -797,22 +798,22 @@ impl<R: Read> Deserializer<R> {
             Value::Bytes(v) => Ok(value::Value::Bytes(v)),
             Value::String(v) => Ok(value::Value::String(v)),
             Value::List(v) => {
-                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
-                Ok(value::Value::List(new_list))
+                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
+                Ok(value::Value::List(new))
             },
             Value::Tuple(v) => {
-                let new_list: Vec<_> = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
-                Ok(value::Value::Tuple(new_list))
+                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
+                Ok(value::Value::Tuple(new))
             },
             Value::Set(v) => {
-                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                      .and_then(|rv| rv.into_hashable())).collect());
-                Ok(value::Value::Set(new_list))
+                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)
+                                                 .and_then(|rv| rv.into_hashable())).collect());
+                Ok(value::Value::Set(new))
             },
             Value::FrozenSet(v) => {
-                let new_list = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                      .and_then(|rv| rv.into_hashable())).collect());
-                Ok(value::Value::FrozenSet(new_list))
+                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)
+                                                 .and_then(|rv| rv.into_hashable())).collect());
+                Ok(value::Value::FrozenSet(new))
             },
             Value::Dict(v) => {
                 let mut map = BTreeMap::new();
