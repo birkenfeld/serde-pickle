@@ -346,7 +346,7 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_some<V>(&mut self, value: V) -> Result<()> where V: Serialize {
+    fn serialize_some<T: Serialize>(&mut self, value: T) -> Result<()> {
         value.serialize(self)
     }
 
@@ -363,8 +363,7 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_newtype_struct<T>(&mut self, _name: &'static str, value: T)
-                                   -> Result<()> where T: Serialize {
+    fn serialize_newtype_struct<T: Serialize>(&mut self, _name: &'static str, value: T) -> Result<()> {
         value.serialize(self)
     }
 
@@ -398,8 +397,8 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_newtype_variant<T>(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                    value: T) -> Result<()> where T: Serialize {
+    fn serialize_newtype_variant<T: Serialize>(&mut self, _name: &str, _variant_index: usize, variant: &str,
+                                               value: T) -> Result<()> {
         try!(self.serialize_str(variant));
         try!(value.serialize(self));
         self.write_opcode(TUPLE2)
@@ -497,8 +496,7 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_seq_elt<T>(&mut self, state: &mut Option<usize>,
-                            value: T) -> Result<()> where T: Serialize {
+    fn serialize_seq_elt<T: Serialize>(&mut self, state: &mut Option<usize>, value: T) -> Result<()> {
         try!(value.serialize(self));
         // Batch appends as in Python pickle
         *state.as_mut().unwrap() += 1;
