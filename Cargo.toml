@@ -9,7 +9,7 @@ documentation = "http://birkenfeld.github.io/serde-pickle/serde_pickle/index.htm
 keywords = ["pickle", "python", "serde", "serialization"]
 
 [dependencies]
-serde = "0.7.0"
+serde = "0.8.0"
 byteorder = "0.5.1"
 num-bigint = "0.1.32"
 num-traits = "0.1.32"
@@ -17,7 +17,7 @@ iter-read = "0.1.0"
 
 # For the example binary and the test suite.
 [dev-dependencies]
-serde_macros = "0.7.0"
-serde_json = "0.7.0"
+serde_macros = "0.8.0"
+serde_json = "0.8.0"
 rand = "0.3.14"
-quickcheck = "0.2.27"
+quickcheck = "0.3.1"

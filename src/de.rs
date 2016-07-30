@@ -895,6 +895,91 @@ impl<R: Read> de::Deserializer for Deserializer<R> {
     }
 
     #[inline]
+    fn deserialize_bool<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_usize<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_u64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_u8<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_u64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_u16<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_u64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_u32<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_u64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_u64<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_isize<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_i64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_i8<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_i64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_i16<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_i64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_i32<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_i64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_i64<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_f32<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_f64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_f64<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_char<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_f64(visitor)
+    }
+
+    #[inline]
+    fn deserialize_str<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_string<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_unit<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
     fn deserialize_option<V>(&mut self, mut visitor: V) -> Result<V::Value>
         where V: de::Visitor,
     {
@@ -906,6 +991,26 @@ impl<R: Read> de::Deserializer for Deserializer<R> {
                 visitor.visit_some(self)
             }
         }
+    }
+
+    #[inline]
+    fn deserialize_seq<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_seq_fixed_size<V: de::Visitor>(&mut self, _len: usize, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_bytes<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize_seq(visitor)
+    }
+
+    #[inline]
+    fn deserialize_map<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
     }
 
     #[inline]
@@ -921,9 +1026,36 @@ impl<R: Read> de::Deserializer for Deserializer<R> {
     }
 
     #[inline]
+    fn deserialize_tuple_struct<V: de::Visitor>(&mut self, _name: &'static str,
+                                                _len: usize, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_struct<V: de::Visitor>(&mut self, _name: &'static str,
+                                          _fields: &'static [&'static str], visitor: V) -> Result<V::Value> {
+        self.deserialize_map(visitor)
+    }
+
+    #[inline]
+    fn deserialize_struct_field<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
+    }
+
+    #[inline]
+    fn deserialize_tuple<V: de::Visitor>(&mut self, _len: usize, visitor: V) -> Result<V::Value> {
+        self.deserialize_seq(visitor)
+    }
+
+    #[inline]
     fn deserialize_enum<V>(&mut self, _name: &str, _variants: &'static [&'static str],
                            mut visitor: V) -> Result<V::Value> where V: de::EnumVisitor {
         visitor.visit(self)
+    }
+
+    #[inline]
+    fn deserialize_ignored_any<V: de::Visitor>(&mut self, visitor: V) -> Result<V::Value> {
+        self.deserialize(visitor)
     }
 }
 
