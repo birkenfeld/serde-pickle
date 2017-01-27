@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -42,14 +42,16 @@
 //! correctly (un)pickle these types.
 
 #![cfg_attr(test, feature(test))]
-#![cfg_attr(test, feature(custom_attribute, custom_derive, plugin))]
-#![cfg_attr(test, plugin(serde_macros))]
 
+#[macro_use]
 extern crate serde;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate byteorder;
 extern crate iter_read;
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
 
 pub use self::ser::{
     Serializer,

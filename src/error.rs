@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -40,20 +40,10 @@ pub enum ErrorCode {
     InvalidLiteral(Vec<u8>),
     /// Found trailing bytes after STOP opcode
     TrailingBytes,
-    /// Invalid type encountered
-    InvalidType(de::Type),
-    /// Invalid value encountered
+    /// Invalid value in pickle stream
     InvalidValue(String),
-    /// Invalid length encountered
-    InvalidLength(usize),
-    /// Unknown enum variant
-    UnknownVariant(String),
-    /// Unknown field
-    UnknownField(String),
-    /// Missing field
-    MissingField(&'static str),
-    /// Custom error
-    Custom(String),
+    /// Structure deserialization error (e.g., unknown variant)
+    Structure(String),
 }
 
 impl fmt::Display for ErrorCode {
@@ -76,13 +66,8 @@ impl fmt::Display for ErrorCode {
             ErrorCode::InvalidLiteral(ref l) =>
                 write!(fmt, "literal is invalid: {}", String::from_utf8_lossy(l)),
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),
-            ErrorCode::InvalidType(ref t) => write!(fmt, "invalid type: {:?}", t),
             ErrorCode::InvalidValue(ref s) => write!(fmt, "invalid value: {}", s),
-            ErrorCode::InvalidLength(l) => write!(fmt, "invalid length: {}", l),
-            ErrorCode::UnknownVariant(ref v) => write!(fmt, "unknown variant: {}", v),
-            ErrorCode::UnknownField(ref f) => write!(fmt, "unknown field: {}", f),
-            ErrorCode::MissingField(f) => write!(fmt, "missing field: {}", f),
-            ErrorCode::Custom(ref s) => fmt.write_str(s),
+            ErrorCode::Structure(ref s) => fmt.write_str(s),
         }
     }
 }
@@ -129,41 +114,13 @@ impl error::Error for Error {
 }
 
 impl de::Error for Error {
-    fn custom<T: Into<String>>(msg: T) -> Error {
-        Error::Syntax(ErrorCode::Custom(msg.into()))
-    }
-
-    fn end_of_stream() -> Error {
-        Error::Syntax(ErrorCode::EOFWhileParsing)
-    }
-
-    fn invalid_type(ty: de::Type) -> Error {
-        Error::Syntax(ErrorCode::InvalidType(ty))
-    }
-
-    fn invalid_value(msg: &str) -> Error {
-        Error::Syntax(ErrorCode::InvalidValue(String::from(msg)))
-    }
-
-    fn invalid_length(len: usize) -> Error {
-        Error::Syntax(ErrorCode::InvalidLength(len))
-    }
-
-    fn unknown_variant(variant: &str) -> Error {
-        Error::Syntax(ErrorCode::UnknownVariant(String::from(variant)))
-    }
-
-    fn unknown_field(field: &str) -> Error {
-        Error::Syntax(ErrorCode::UnknownField(String::from(field)))
-    }
-
-    fn missing_field(field: &'static str) -> Error {
-        Error::Syntax(ErrorCode::MissingField(field))
+    fn custom<T: fmt::Display>(msg: T) -> Error {
+        Error::Syntax(ErrorCode::Structure(msg.to_string()))
     }
 }
 
 impl ser::Error for Error {
-    fn custom<T: Into<String>>(msg: T) -> Error {
-        Error::Syntax(ErrorCode::Custom(msg.into()))
+    fn custom<T: fmt::Display>(msg: T) -> Error {
+        Error::Syntax(ErrorCode::Structure(msg.to_string()))
     }
 }

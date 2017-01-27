@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -365,11 +365,11 @@ mod benches {
     fn unpickle_nested_list(b: &mut Bencher) {
         // Creates [[[[...]]]]
         let mut buffer = b"\x80\x02".to_vec();
-        for i in 0..201 {
+        for i in 0..101 {
             buffer.extend(b"]r");
             buffer.write_u32::<LittleEndian>(i).unwrap();
         }
-        for _ in 0..200 {
+        for _ in 0..100 {
             buffer.push(b'a');
         }
         buffer.push(b'.');

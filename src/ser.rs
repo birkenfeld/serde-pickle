@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -192,23 +192,170 @@ impl<W: io::Write> Serializer<W> {
     }
 }
 
-impl<W: io::Write> ser::Serializer for Serializer<W> {
+pub struct Compound<'a, W: io::Write + 'a> {
+    ser: &'a mut Serializer<W>,
+    state: Option<usize>,
+}
+
+impl<'a, W: io::Write> ser::SerializeSeq for Compound<'a, W> {
+    type Ok = ();
     type Error = Error;
-    type SeqState = Option<usize>;
-    type TupleState = bool;
-    type MapState = Option<usize>;
-    type StructState = Self::MapState;
-    type TupleStructState = bool;
-    type StructVariantState = Self::MapState;
-    type TupleVariantState = ();
 
     #[inline]
-    fn serialize_bool(&mut self, value: bool) -> Result<()> {
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        try!(value.serialize(&mut *self.ser));
+        // Batch appends as in Python pickle
+        *self.state.as_mut().unwrap() += 1;
+        if self.state.unwrap() == 1000 {
+            try!(self.ser.write_opcode(APPENDS));
+            try!(self.ser.write_opcode(MARK));
+            self.state = Some(0);
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        if self.state.is_some() {
+            try!(self.ser.write_opcode(APPENDS));
+        }
+        Ok(())
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeTuple for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        value.serialize(&mut *self.ser)
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        if self.state.is_some() {
+            try!(self.ser.write_opcode(TUPLE));
+        }
+        Ok(())
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeTupleStruct for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        ser::SerializeTuple::serialize_element(self, value)
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        ser::SerializeTuple::end(self)
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeTupleVariant for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        value.serialize(&mut *self.ser)
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        try!(self.ser.write_opcode(APPENDS));
+        self.ser.write_opcode(TUPLE2)
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeMap for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<()> {
+        key.serialize(&mut *self.ser)
+    }
+
+    #[inline]
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        try!(value.serialize(&mut *self.ser));
+        // Batch appends as in Python pickle
+        *self.state.as_mut().unwrap() += 1;
+        if self.state.unwrap() == 1000 {
+            try!(self.ser.write_opcode(SETITEMS));
+            try!(self.ser.write_opcode(MARK));
+            self.state = Some(0);
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        if self.state.is_some() {
+            try!(self.ser.write_opcode(SETITEMS));
+        }
+        Ok(())
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeStruct for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
+        try!(ser::SerializeMap::serialize_key(self, key));
+        ser::SerializeMap::serialize_value(self, value)
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        ser::SerializeMap::end(self)
+    }
+}
+
+impl<'a, W: io::Write> ser::SerializeStructVariant for Compound<'a, W> {
+    type Ok = ();
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
+        ser::SerializeStruct::serialize_field(self, key, value)
+    }
+
+    #[inline]
+    fn end(self) -> Result<()> {
+        if self.state.is_some() {
+            try!(self.ser.write_opcode(SETITEMS));
+        }
+        self.ser.write_opcode(TUPLE2)
+    }
+}
+
+impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
+    type Ok = ();
+    type Error = Error;
+
+    type SerializeSeq = Compound<'a, W>;
+    type SerializeTuple = Self::SerializeSeq;
+    type SerializeTupleStruct = Self::SerializeTuple;
+    type SerializeTupleVariant = Self::SerializeTuple;
+    type SerializeMap = Compound<'a, W>;
+    type SerializeStruct = Self::SerializeMap;
+    type SerializeStructVariant = Self::SerializeMap;
+
+    #[inline]
+    fn serialize_bool(self, value: bool) -> Result<()> {
         self.write_opcode(if value { NEWTRUE } else { NEWFALSE })
     }
 
     #[inline]
-    fn serialize_i8(&mut self, value: i8) -> Result<()> {
+    fn serialize_i8(self, value: i8) -> Result<()> {
         if value > 0 {
             try!(self.write_opcode(BININT1));
             self.writer.write_i8(value).map_err(From::from)
@@ -219,7 +366,7 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_i16(&mut self, value: i16) -> Result<()> {
+    fn serialize_i16(self, value: i16) -> Result<()> {
         if value > 0 {
             try!(self.write_opcode(BININT2));
             self.writer.write_i16::<LittleEndian>(value).map_err(From::from)
@@ -230,13 +377,13 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_i32(&mut self, value: i32) -> Result<()> {
+    fn serialize_i32(self, value: i32) -> Result<()> {
         try!(self.write_opcode(BININT));
         self.writer.write_i32::<LittleEndian>(value).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_i64(&mut self, value: i64) -> Result<()> {
+    fn serialize_i64(self, value: i64) -> Result<()> {
         if -0x8000_0000 <= value && value < 0x8000_0000 {
             try!(self.write_opcode(BININT));
             self.writer.write_i32::<LittleEndian>(value as i32).map_err(From::from)
@@ -248,24 +395,19 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_isize(&mut self, value: isize) -> Result<()> {
-        self.serialize_i64(value as i64)
-    }
-
-    #[inline]
-    fn serialize_u8(&mut self, value: u8) -> Result<()> {
+    fn serialize_u8(self, value: u8) -> Result<()> {
         try!(self.write_opcode(BININT1));
         self.writer.write_u8(value).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_u16(&mut self, value: u16) -> Result<()> {
+    fn serialize_u16(self, value: u16) -> Result<()> {
         try!(self.write_opcode(BININT2));
         self.writer.write_u16::<LittleEndian>(value).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_u32(&mut self, value: u32) -> Result<()> {
+    fn serialize_u32(self, value: u32) -> Result<()> {
         if value < 0x8000_0000 {
             try!(self.write_opcode(BININT));
             self.writer.write_u32::<LittleEndian>(value).map_err(From::from)
@@ -280,7 +422,7 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_u64(&mut self, value: u64) -> Result<()> {
+    fn serialize_u64(self, value: u64) -> Result<()> {
         if value < 0x8000_0000 {
             try!(self.write_opcode(BININT));
             self.writer.write_u32::<LittleEndian>(value as u32).map_err(From::from)
@@ -295,39 +437,34 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_usize(&mut self, value: usize) -> Result<()> {
-        self.serialize_u64(value as u64)
-    }
-
-    #[inline]
-    fn serialize_f32(&mut self, value: f32) -> Result<()> {
+    fn serialize_f32(self, value: f32) -> Result<()> {
         try!(self.write_opcode(BINFLOAT));
         // Yes, this one is big endian.
         self.writer.write_f64::<BigEndian>(value as f64).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_f64(&mut self, value: f64) -> Result<()> {
+    fn serialize_f64(self, value: f64) -> Result<()> {
         try!(self.write_opcode(BINFLOAT));
         self.writer.write_f64::<BigEndian>(value).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_char(&mut self, value: char) -> Result<()> {
+    fn serialize_char(self, value: char) -> Result<()> {
         let mut string = String::with_capacity(4);  // longest utf-8 encoding
         string.push(value);
         self.serialize_str(&string)
     }
 
     #[inline]
-    fn serialize_str(&mut self, value: &str) -> Result<()> {
+    fn serialize_str(self, value: &str) -> Result<()> {
         try!(self.write_opcode(BINUNICODE));
         try!(self.writer.write_u32::<LittleEndian>(value.len() as u32));
         self.writer.write_all(value.as_bytes()).map_err(From::from)
     }
 
     #[inline]
-    fn serialize_bytes(&mut self, value: &[u8]) -> Result<()> {
+    fn serialize_bytes(self, value: &[u8]) -> Result<()> {
         if value.len() < 256 {
             let op = if self.use_proto_3 { SHORT_BINBYTES } else { SHORT_BINSTRING };
             try!(self.write_opcode(op));
@@ -341,47 +478,15 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     }
 
     #[inline]
-    fn serialize_none(&mut self) -> Result<()> {
-        self.serialize_unit()
-    }
-
-    #[inline]
-    fn serialize_some<T: Serialize>(&mut self, value: T) -> Result<()> {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_unit(&mut self) -> Result<()> {
+    fn serialize_unit(self) -> Result<()> {
         // Although Python has an empty tuple, we use None here for compatibility
         // with other serialization formats.
         self.write_opcode(NONE)
     }
 
     #[inline]
-    fn serialize_unit_struct(&mut self, _name: &'static str) -> Result<()> {
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<()> {
         self.write_opcode(EMPTY_TUPLE)
-    }
-
-    #[inline]
-    fn serialize_newtype_struct<T: Serialize>(&mut self, _name: &'static str, value: T) -> Result<()> {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_struct(&mut self, _name: &'static str, len: usize) -> Result<Self::MapState> {
-        self.serialize_map(Some(len))
-    }
-
-    #[inline]
-    fn serialize_struct_elt<T: Serialize>(&mut self, state: &mut Self::MapState,
-                                          key: &'static str, value: T) -> Result<()> {
-        try!(self.serialize_map_key(state, key));
-        self.serialize_map_value(state, value)
-    }
-
-    #[inline]
-    fn serialize_struct_end(&mut self, state: Self::MapState) -> Result<()> {
-        self.serialize_map_end(state)
     }
 
     // We'll use tuples for serializing enums:
@@ -390,175 +495,103 @@ impl<W: io::Write> ser::Serializer for Serializer<W> {
     // Variant(T1, T2)     ('Variant', [T1, T2])
     // Variant { x: T }    ('Variant', {'x': T})
     #[inline]
-    fn serialize_unit_variant(&mut self, _name: &str, _variant_index: usize, variant: &str)
+    fn serialize_unit_variant(self, _name: &str, _variant_index: usize, variant: &str)
                               -> Result<()> {
         try!(self.serialize_str(variant));
         self.write_opcode(TUPLE1)
     }
 
     #[inline]
-    fn serialize_newtype_variant<T: Serialize>(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                               value: T) -> Result<()> {
-        try!(self.serialize_str(variant));
-        try!(value.serialize(self));
-        self.write_opcode(TUPLE2)
-    }
-
-    #[inline]
-    fn serialize_tuple_variant(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                               _len: usize) -> Result<()> {
-        try!(self.serialize_str(variant));
-        try!(self.write_opcode(EMPTY_LIST));
-        self.write_opcode(MARK)
-    }
-
-    #[inline]
-    fn serialize_tuple_variant_elt<T: Serialize>(&mut self, _state: &mut (),
-                                                 value: T) -> Result<()> {
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _name: &'static str, value: &T) -> Result<()> {
         value.serialize(self)
     }
 
     #[inline]
-    fn serialize_tuple_variant_end(&mut self, _state: ()) -> Result<()> {
-        try!(self.write_opcode(APPENDS));
-        self.write_opcode(TUPLE2)
-    }
-
-    #[inline]
-    fn serialize_struct_variant(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                len: usize) -> Result<Option<usize>> {
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &str,
+                                                        _variant_index: usize, variant: &str,
+                                                        value: &T) -> Result<()> {
         try!(self.serialize_str(variant));
-        self.serialize_map(Some(len))
-    }
-
-    #[inline]
-    fn serialize_struct_variant_elt<T: Serialize>(&mut self, state: &mut Option<usize>,
-                                                       key: &'static str, value: T) -> Result<()> {
-        try!(self.serialize_map_key(state, key));
-        self.serialize_map_value(state, value)
-    }
-
-    #[inline]
-    fn serialize_struct_variant_end(&mut self, state: Option<usize>) -> Result<()> {
-        try!(self.serialize_map_end(state));
+        try!(value.serialize(&mut *self));
         self.write_opcode(TUPLE2)
     }
 
     #[inline]
-    fn serialize_tuple_struct(&mut self, _name: &'static str, len: usize) -> Result<bool> {
+    fn serialize_none(self) -> Result<()> {
+        self.serialize_unit()
+    }
+
+    #[inline]
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<()> {
+        value.serialize(self)
+    }
+
+    #[inline]
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
+        try!(self.write_opcode(EMPTY_LIST));
+        match len {
+            Some(len) if len == 0 => Ok(Compound { ser: self, state: None }),
+            _ => {
+                try!(self.write_opcode(MARK));
+                Ok(Compound { ser: self, state: Some(0) })
+            }
+        }
+    }
+
+    #[inline]
+    fn serialize_seq_fixed_size(self, _len: usize) -> Result<Self::SerializeSeq> {
+        try!(self.write_opcode(EMPTY_LIST));
+        try!(self.write_opcode(MARK));
+        Ok(Compound { ser: self, state: Some(0) })
+    }
+
+    #[inline]
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
+        if len == 0 {
+            try!(self.write_opcode(EMPTY_TUPLE));
+            Ok(Compound { ser: self, state: None })
+        } else {
+            try!(self.write_opcode(MARK));
+            Ok(Compound { ser: self, state: Some(0) })
+        }
+    }
+
+    #[inline]
+    fn serialize_tuple_struct(self, _name: &'static str, len: usize)
+                              -> Result<Self::SerializeTupleStruct> {
         self.serialize_tuple(len)
     }
 
     #[inline]
-    fn serialize_tuple_struct_elt<T: Serialize>(&mut self, state: &mut bool, value: T) -> Result<()> {
-        self.serialize_tuple_elt(state, value)
-    }
-
-    #[inline]
-    fn serialize_tuple_struct_end(&mut self, state: bool) -> Result<()> {
-        self.serialize_tuple_end(state)
-    }
-
-    #[inline]
-    fn serialize_tuple(&mut self, len: usize) -> Result<bool> {
-        if len == 0 {
-            try!(self.write_opcode(EMPTY_TUPLE));
-            Ok(false)
-        } else {
-            try!(self.write_opcode(MARK));
-            Ok(true)
-        }
-    }
-
-    #[inline]
-    fn serialize_tuple_elt<T: Serialize>(&mut self, _state: &mut bool, value: T) -> Result<()> {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_tuple_end(&mut self, state: bool) -> Result<()> {
-        if state {
-            try!(self.write_opcode(TUPLE));
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq(&mut self, len: Option<usize>) -> Result<Option<usize>> {
-        try!(self.write_opcode(EMPTY_LIST));
-        match len {
-            Some(len) if len == 0 => Ok(None),
-            _ => {
-                try!(self.write_opcode(MARK));
-                Ok(Some(0))
-            }
-        }
-    }
-
-    #[inline]
-    fn serialize_seq_elt<T: Serialize>(&mut self, state: &mut Option<usize>, value: T) -> Result<()> {
-        try!(value.serialize(self));
-        // Batch appends as in Python pickle
-        *state.as_mut().unwrap() += 1;
-        if state.unwrap() == 1000 {
-            try!(self.write_opcode(APPENDS));
-            try!(self.write_opcode(MARK));
-            *state = Some(0);
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq_end(&mut self, state: Option<usize>) -> Result<()> {
-        if state.is_some() {
-            try!(self.write_opcode(APPENDS));
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq_fixed_size(&mut self, _len: usize) -> Result<Option<usize>> {
+    fn serialize_tuple_variant(self, _name: &str, _variant_index: usize, variant: &str,
+                               _len: usize) -> Result<Self::SerializeTupleVariant> {
+        try!(self.serialize_str(variant));
         try!(self.write_opcode(EMPTY_LIST));
         try!(self.write_opcode(MARK));
-        Ok(Some(0))
+        Ok(Compound { ser: self, state: None })
     }
 
     #[inline]
-    fn serialize_map(&mut self, len: Option<usize>) -> Result<Option<usize>> {
+    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         try!(self.write_opcode(EMPTY_DICT));
         match len {
-            Some(len) if len == 0 => Ok(None),
+            Some(len) if len == 0 => Ok(Compound { ser: self, state: None }),
             _ => {
                 try!(self.write_opcode(MARK));
-                Ok(Some(0))
+                Ok(Compound { ser: self, state: Some(0) })
             }
         }
     }
 
     #[inline]
-    fn serialize_map_key<T: Serialize>(&mut self, _state: &mut Option<usize>, key: T) -> Result<()> {
-        key.serialize(self)
+    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
+        self.serialize_map(Some(len))
     }
 
     #[inline]
-    fn serialize_map_value<T: Serialize>(&mut self, state: &mut Option<usize>, value: T) -> Result<()> {
-        try!(value.serialize(self));
-        // Batch appends as in Python pickle
-        *state.as_mut().unwrap() += 1;
-        if state.unwrap() == 1000 {
-            try!(self.write_opcode(SETITEMS));
-            try!(self.write_opcode(MARK));
-            *state = Some(0);
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_map_end(&mut self, state: Option<usize>) -> Result<()> {
-        if state.is_some() {
-            try!(self.write_opcode(SETITEMS));
-        }
-        Ok(())
+    fn serialize_struct_variant(self, _name: &str, _variant_index: usize, variant: &str,
+                                len: usize) -> Result<Self::SerializeStructVariant> {
+        try!(self.serialize_str(variant));
+        self.serialize_map(Some(len))
     }
 }
 

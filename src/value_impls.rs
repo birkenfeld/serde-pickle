@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -6,6 +6,7 @@
 
 //! Serializer/Deserializer implementations for `value::Value`.
 
+use std::fmt;
 use std::vec;
 use std::result::Result as StdResult;
 use std::collections::{btree_map, BTreeMap};
@@ -20,24 +21,29 @@ use error::{Error, ErrorCode, Result};
 
 impl de::Deserialize for Value {
     #[inline]
-    fn deserialize<D: de::Deserializer>(deser: &mut D) -> StdResult<Value, D::Error> {
+    fn deserialize<D: de::Deserializer>(deser: D) -> StdResult<Value, D::Error> {
         struct ValueVisitor;
 
         impl Visitor for ValueVisitor {
             type Value = Value;
 
             #[inline]
-            fn visit_bool<E>(&mut self, value: bool) -> StdResult<Value, E> {
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a value")
+            }
+
+            #[inline]
+            fn visit_bool<E>(self, value: bool) -> StdResult<Value, E> {
                 Ok(Value::Bool(value))
             }
 
             #[inline]
-            fn visit_i64<E>(&mut self, value: i64) -> StdResult<Value, E> {
+            fn visit_i64<E>(self, value: i64) -> StdResult<Value, E> {
                 Ok(Value::I64(value))
             }
 
             #[inline]
-            fn visit_u64<E>(&mut self, value: u64) -> StdResult<Value, E> {
+            fn visit_u64<E>(self, value: u64) -> StdResult<Value, E> {
                 if value < 0x8000_0000_0000_0000 {
                     Ok(Value::I64(value as i64))
                 } else {
@@ -46,54 +52,53 @@ impl de::Deserialize for Value {
             }
 
             #[inline]
-            fn visit_f64<E>(&mut self, value: f64) -> StdResult<Value, E> {
+            fn visit_f64<E>(self, value: f64) -> StdResult<Value, E> {
                 Ok(Value::F64(value))
             }
 
             #[inline]
-            fn visit_str<E: de::Error>(&mut self, value: &str) -> StdResult<Value, E> {
+            fn visit_str<E: de::Error>(self, value: &str) -> StdResult<Value, E> {
                 self.visit_string(String::from(value))
             }
 
             #[inline]
-            fn visit_string<E>(&mut self, value: String) -> StdResult<Value, E> {
+            fn visit_string<E>(self, value: String) -> StdResult<Value, E> {
                 Ok(Value::String(value))
             }
 
             #[inline]
-            fn visit_bytes<E: de::Error>(&mut self, value: &[u8]) -> StdResult<Value, E> {
+            fn visit_bytes<E: de::Error>(self, value: &[u8]) -> StdResult<Value, E> {
                 self.visit_byte_buf(value.to_vec())
             }
 
             #[inline]
-            fn visit_byte_buf<E: de::Error>(&mut self, value: Vec<u8>) -> StdResult<Value, E> {
+            fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> StdResult<Value, E> {
                 Ok(Value::Bytes(value))
             }
 
             #[inline]
-            fn visit_none<E>(&mut self) -> StdResult<Value, E> {
+            fn visit_none<E>(self) -> StdResult<Value, E> {
                 Ok(Value::None)
             }
 
             #[inline]
-            fn visit_some<D: de::Deserializer>(&mut self, deser: &mut D)
-                                               -> StdResult<Value, D::Error> {
+            fn visit_some<D: de::Deserializer>(self, deser: D) -> StdResult<Value, D::Error> {
                 de::Deserialize::deserialize(deser)
             }
 
             #[inline]
-            fn visit_unit<E>(&mut self) -> StdResult<Value, E> {
+            fn visit_unit<E>(self) -> StdResult<Value, E> {
                 Ok(Value::None)
             }
 
             #[inline]
-            fn visit_seq<V: de::SeqVisitor>(&mut self, visitor: V) -> StdResult<Value, V::Error> {
+            fn visit_seq<V: de::SeqVisitor>(self, visitor: V) -> StdResult<Value, V::Error> {
                 let values = try!(de::impls::VecVisitor::new().visit_seq(visitor));
                 Ok(Value::List(values))
             }
 
             #[inline]
-            fn visit_map<V: de::MapVisitor>(&mut self, visitor: V) -> StdResult<Value, V::Error> {
+            fn visit_map<V: de::MapVisitor>(self, visitor: V) -> StdResult<Value, V::Error> {
                 let values = try!(de::impls::BTreeMapVisitor::new().visit_map(visitor));
                 Ok(Value::Dict(values))
             }
@@ -105,24 +110,29 @@ impl de::Deserialize for Value {
 
 impl de::Deserialize for HashableValue {
     #[inline]
-    fn deserialize<D: de::Deserializer>(deser: &mut D) -> StdResult<HashableValue, D::Error> {
+    fn deserialize<D: de::Deserializer>(deser: D) -> StdResult<HashableValue, D::Error> {
         struct ValueVisitor;
 
         impl Visitor for ValueVisitor {
             type Value = HashableValue;
 
             #[inline]
-            fn visit_bool<E>(&mut self, value: bool) -> StdResult<HashableValue, E> {
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a hashable value")
+            }
+
+            #[inline]
+            fn visit_bool<E>(self, value: bool) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::Bool(value))
             }
 
             #[inline]
-            fn visit_i64<E>(&mut self, value: i64) -> StdResult<HashableValue, E> {
+            fn visit_i64<E>(self, value: i64) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::I64(value))
             }
 
             #[inline]
-            fn visit_u64<E>(&mut self, value: u64) -> StdResult<HashableValue, E> {
+            fn visit_u64<E>(self, value: u64) -> StdResult<HashableValue, E> {
                 if value < 0x8000_0000_0000_0000 {
                     Ok(HashableValue::I64(value as i64))
                 } else {
@@ -131,38 +141,37 @@ impl de::Deserialize for HashableValue {
             }
 
             #[inline]
-            fn visit_f64<E>(&mut self, value: f64) -> StdResult<HashableValue, E> {
+            fn visit_f64<E>(self, value: f64) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::F64(value))
             }
 
             #[inline]
-            fn visit_str<E: de::Error>(&mut self, value: &str) -> StdResult<HashableValue, E> {
+            fn visit_str<E: de::Error>(self, value: &str) -> StdResult<HashableValue, E> {
                 self.visit_string(String::from(value))
             }
 
             #[inline]
-            fn visit_string<E>(&mut self, value: String) -> StdResult<HashableValue, E> {
+            fn visit_string<E>(self, value: String) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::String(value))
             }
 
             #[inline]
-            fn visit_none<E>(&mut self) -> StdResult<HashableValue, E> {
+            fn visit_none<E>(self) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::None)
             }
 
             #[inline]
-            fn visit_some<D: de::Deserializer>(&mut self, deser: &mut D)
-                                               -> StdResult<HashableValue, D::Error> {
+            fn visit_some<D: de::Deserializer>(self, deser: D) -> StdResult<HashableValue, D::Error> {
                 de::Deserialize::deserialize(deser)
             }
 
             #[inline]
-            fn visit_unit<E>(&mut self) -> StdResult<HashableValue, E> {
+            fn visit_unit<E>(self) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::None)
             }
 
             #[inline]
-            fn visit_seq<V: de::SeqVisitor>(&mut self, visitor: V)
+            fn visit_seq<V: de::SeqVisitor>(self, visitor: V)
                                             -> StdResult<HashableValue, V::Error> {
                 let values = try!(de::impls::VecVisitor::new().visit_seq(visitor));
                 Ok(HashableValue::Tuple(values))
@@ -187,13 +196,13 @@ impl Deserializer {
     }
 }
 
-impl de::Deserializer for Deserializer {
+impl<'a> de::Deserializer for &'a mut Deserializer {
     type Error = Error;
 
-    fn deserialize<V: Visitor>(&mut self, mut visitor: V) -> Result<V::Value> {
+    fn deserialize<V: Visitor>(mut self, visitor: V) -> Result<V::Value> {
         let value = match self.value.take() {
             Some(value) => value,
-            None => { return Err(de::Error::end_of_stream()); }
+            None => { return Err(Error::Syntax(ErrorCode::EOFWhileParsing)); }
         };
 
         match value {
@@ -204,7 +213,8 @@ impl de::Deserializer for Deserializer {
                 if let Some(i) = v.to_i64() {
                     visitor.visit_i64(i)
                 } else {
-                    return Err(de::Error::invalid_value("integer too large"));
+                    return Err(Error::Syntax(
+                        ErrorCode::InvalidValue("integer too large".into())));
                 }
             },
             Value::F64(v) => visitor.visit_f64(v),
@@ -213,14 +223,14 @@ impl de::Deserializer for Deserializer {
             Value::List(v) => {
                 let len = v.len();
                 visitor.visit_seq(SeqDeserializer {
-                    de: self,
+                    de: &mut self,
                     iter: v.into_iter(),
                     len: len,
                 })
             },
             Value::Tuple(v) => {
                 visitor.visit_seq(SeqDeserializer {
-                    de: self,
+                    de: &mut self,
                     len: v.len(),
                     iter: v.into_iter(),
                 })
@@ -228,7 +238,7 @@ impl de::Deserializer for Deserializer {
             Value::Set(v) | Value::FrozenSet(v) => {
                 let v: Vec<_> = v.into_iter().map(HashableValue::into_value).collect();
                 visitor.visit_seq(SeqDeserializer {
-                    de: self,
+                    de: &mut self,
                     len: v.len(),
                     iter: v.into_iter(),
                 })
@@ -236,7 +246,7 @@ impl de::Deserializer for Deserializer {
             Value::Dict(v) => {
                 let len = v.len();
                 visitor.visit_map(MapDeserializer {
-                    de: self,
+                    de: &mut self,
                     iter: v.into_iter(),
                     value: None,
                     len: len,
@@ -246,198 +256,73 @@ impl de::Deserializer for Deserializer {
     }
 
     #[inline]
-    fn deserialize_bool<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_usize<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_u8<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_u16<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_u32<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_u64<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_isize<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_i8<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_i16<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_i32<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_i64<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_f32<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_f64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_f64<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_char<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_f64(visitor)
-    }
-
-    #[inline]
-    fn deserialize_str<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_string<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_unit<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_option<V: Visitor>(&mut self, mut visitor: V) -> Result<V::Value> {
+    fn deserialize_option<V: Visitor>(self, visitor: V) -> Result<V::Value> {
         match self.value {
             Some(Value::None) => visitor.visit_none(),
             Some(_) => visitor.visit_some(self),
-            None => Err(de::Error::end_of_stream()),
+            None => Err(Error::Syntax(ErrorCode::EOFWhileParsing)),
         }
     }
 
     #[inline]
-    fn deserialize_seq<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_seq_fixed_size<V: Visitor>(&mut self, _len: usize, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_bytes<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize_seq(visitor)
-    }
-
-    #[inline]
-    fn deserialize_map<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_unit_struct<V: Visitor>(&mut self, _name: &str, visitor: V) -> Result<V::Value> {
-        self.deserialize_unit(visitor)
-    }
-
-    #[inline]
-    fn deserialize_newtype_struct<V: Visitor>(&mut self, _name: &str, mut visitor: V) -> Result<V::Value> {
+    fn deserialize_newtype_struct<V: Visitor>(self, _name: &str, visitor: V) -> Result<V::Value> {
         visitor.visit_newtype_struct(self)
     }
 
     #[inline]
-    fn deserialize_tuple_struct<V: Visitor>(&mut self, _name: &'static str,
-                                            _len: usize, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
+    fn deserialize_enum<V: de::Visitor>(self, _name: &str,
+                                        _variants: &'static [&'static str],
+                                        visitor: V) -> Result<V::Value> {
+        visitor.visit_enum(self)
     }
 
-    #[inline]
-    fn deserialize_struct<V: Visitor>(&mut self, _name: &'static str,
-                                      _fields: &'static [&'static str], visitor: V) -> Result<V::Value> {
-        self.deserialize_map(visitor)
-    }
-
-    #[inline]
-    fn deserialize_struct_field<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
-    }
-
-    #[inline]
-    fn deserialize_tuple<V: Visitor>(&mut self, _len: usize, visitor: V) -> Result<V::Value> {
-        self.deserialize_seq(visitor)
-    }
-
-    #[inline]
-    fn deserialize_enum<V: de::EnumVisitor>(&mut self, _name: &str,
-                                            _variants: &'static [&'static str],
-                                            mut visitor: V) -> Result<V::Value> {
-        visitor.visit(self)
-    }
-
-    #[inline]
-    fn deserialize_ignored_any<V: Visitor>(&mut self, visitor: V) -> Result<V::Value> {
-        self.deserialize(visitor)
+    forward_to_deserialize! {
+        bool u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 char str string unit seq
+        seq_fixed_size bytes byte_buf map unit_struct tuple_struct struct
+        struct_field tuple ignored_any
     }
 }
 
-impl de::VariantVisitor for Deserializer {
+impl<'a> de::EnumVisitor for &'a mut Deserializer {
     type Error = Error;
+    type Variant = Self;
 
-    fn visit_variant<T: de::Deserialize>(&mut self) -> Result<T> {
+    fn visit_variant_seed<T: de::DeserializeSeed>(self, seed: T) -> Result<(T::Value, Self::Variant)> {
         match self.value.take() {
             Some(Value::Tuple(mut v)) => {
                 if v.len() == 2 {
                     let args = v.pop();
                     self.value = v.pop();
-                    let res = de::Deserialize::deserialize(self);
+                    let res = try!(seed.deserialize(&mut *self));
                     self.value = args;
-                    res
+                    Ok((res, self))
                 } else {
                     self.value = v.pop();
-                    de::Deserialize::deserialize(self)
+                    let res = try!(seed.deserialize(&mut *self));
+                    Ok((res, self))
                 }
             }
-            _ => Err(Error::Syntax(ErrorCode::Custom("enums must be tuples".into())))
+            _ => Err(Error::Syntax(ErrorCode::Structure("enums must be tuples".into())))
         }
     }
+}
 
-    fn visit_unit(&mut self) -> Result<()> {
+impl<'a> de::VariantVisitor for &'a mut Deserializer {
+    type Error = Error;
+
+    fn visit_unit(self) -> Result<()> {
         Ok(())
     }
 
-    fn visit_newtype<T: de::Deserialize>(&mut self) -> Result<T> {
-        de::Deserialize::deserialize(self)
+    fn visit_newtype_seed<T: de::DeserializeSeed>(self, seed: T) -> Result<T::Value> {
+        seed.deserialize(self)
     }
 
-    fn visit_tuple<V: Visitor>(&mut self, _len: usize, visitor: V) -> Result<V::Value> {
+    fn visit_tuple<V: Visitor>(self, _len: usize, visitor: V) -> Result<V::Value> {
         de::Deserializer::deserialize(self, visitor)
     }
 
-    fn visit_struct<V: Visitor>(&mut self, _fields: &'static [&'static str], visitor: V)
+    fn visit_struct<V: Visitor>(self, _fields: &'static [&'static str], visitor: V)
                                 -> Result<V::Value> {
         de::Deserializer::deserialize(self, visitor)
     }
@@ -452,22 +337,14 @@ struct SeqDeserializer<'a> {
 impl<'a> de::SeqVisitor for SeqDeserializer<'a> {
     type Error = Error;
 
-    fn visit<T: de::Deserialize>(&mut self) -> Result<Option<T>> {
+    fn visit_seed<T: de::DeserializeSeed>(&mut self, seed: T) -> Result<Option<T::Value>> {
         match self.iter.next() {
             Some(value) => {
                 self.len -= 1;
                 self.de.value = Some(value);
-                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
+                Ok(Some(try!(seed.deserialize(&mut *self.de))))
             }
             None => Ok(None),
-        }
-    }
-
-    fn end(&mut self) -> Result<()> {
-        if self.len == 0 {
-            Ok(())
-        } else {
-            Err(de::Error::invalid_length(self.len))
         }
     }
 
@@ -486,34 +363,22 @@ struct MapDeserializer<'a> {
 impl<'a> de::MapVisitor for MapDeserializer<'a> {
     type Error = Error;
 
-    fn visit_key<T: de::Deserialize>(&mut self) -> Result<Option<T>> {
+    fn visit_key_seed<T: de::DeserializeSeed>(&mut self, seed: T) -> Result<Option<T::Value>> {
         match self.iter.next() {
             Some((key, value)) => {
                 self.len -= 1;
                 self.value = Some(value);
                 self.de.value = Some(key.into_value());
-                Ok(Some(try!(de::Deserialize::deserialize(self.de))))
+                Ok(Some(try!(seed.deserialize(&mut *self.de))))
             }
             None => Ok(None),
         }
     }
 
-    fn visit_value<T: de::Deserialize>(&mut self) -> Result<T> {
+    fn visit_value_seed<T: de::DeserializeSeed>(&mut self, seed: T) -> Result<T::Value> {
         let value = self.value.take().unwrap();
         self.de.value = Some(value);
-        Ok(try!(de::Deserialize::deserialize(self.de)))
-    }
-
-    fn end(&mut self) -> Result<()> {
-        if self.len == 0 {
-            Ok(())
-        } else {
-            Err(de::Error::invalid_length(self.len))
-        }
-    }
-
-    fn missing_field<V: de::Deserialize>(&mut self, field: &'static str) -> Result<V> {
-        Err(de::Error::missing_field(field))
+        Ok(try!(seed.deserialize(&mut *self.de)))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -523,321 +388,333 @@ impl<'a> de::MapVisitor for MapDeserializer<'a> {
 
 
 /// Create a `serde::Serializer` that serializes a `Serialize`e into a `Value`.
-pub struct Serializer {
-    values: Vec<Value>,
-}
-
-impl Serializer {
-    /// Construct a new `Serializer`.
-    pub fn new() -> Serializer {
-        Serializer {
-            values: Vec::with_capacity(16),
-        }
-    }
-
-    /// Unwrap the `Serializer` and return the `Value`.
-    pub fn finish(mut self) -> Result<Value> {
-        self.values.pop().ok_or_else(|| ser::Error::custom("expected a value"))
-    }
-}
+pub struct Serializer;
 
 impl Default for Serializer {
     fn default() -> Self {
-        Self::new()
+        Serializer
     }
 }
 
-impl ser::Serializer for Serializer {
+pub struct SerializeSeq<'a> {
+    ser: &'a mut Serializer,
+    state: Vec<Value>,
+}
+
+impl<'a> ser::SerializeSeq for SerializeSeq<'a> {
+    type Ok = Value;
     type Error = Error;
-    type SeqState = Serializer;
-    type TupleState = Self::SeqState;
-    type MapState = (BTreeMap<HashableValue, Value>, Serializer);
-    type StructState = Self::MapState;
-    type TupleStructState = Self::TupleState;
-    type StructVariantState = Self::MapState;
-    type TupleVariantState = Self::TupleState;
 
     #[inline]
-    fn serialize_bool(&mut self, value: bool) -> Result<()> {
-        self.values.push(Value::Bool(value));
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        self.state.push(try!(value.serialize(&mut *self.ser)));
         Ok(())
     }
 
     #[inline]
-    fn serialize_isize(&mut self, v: isize) -> Result<()> {
-        self.serialize_i64(v as i64)
+    fn end(self) -> Result<Value> {
+        Ok(Value::List(self.state))
+    }
+}
+
+impl<'a> ser::SerializeTuple for SerializeSeq<'a> {
+    type Ok = Value;
+    type Error = Error;
+
+    #[inline]
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        ser::SerializeSeq::serialize_element(self, value)
     }
 
     #[inline]
-    fn serialize_i8(&mut self, v: i8) -> Result<()> {
-        self.serialize_i64(v as i64)
+    fn end(self) -> Result<Value> {
+        Ok(Value::Tuple(self.state))
+    }
+}
+
+impl<'a> ser::SerializeTupleStruct for SerializeSeq<'a> {
+    type Ok = Value;
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        ser::SerializeSeq::serialize_element(self, value)
     }
 
     #[inline]
-    fn serialize_i16(&mut self, v: i16) -> Result<()> {
-        self.serialize_i64(v as i64)
+    fn end(self) -> Result<Value> {
+        Ok(Value::Tuple(self.state))
     }
+}
+
+pub struct SerializeTupleVariant<'a> {
+    ser: &'a mut Serializer,
+    variant: &'a str,
+    state: Vec<Value>,
+}
+
+impl<'a> ser::SerializeTupleVariant for SerializeTupleVariant<'a> {
+    type Ok = Value;
+    type Error = Error;
 
     #[inline]
-    fn serialize_i32(&mut self, v: i32) -> Result<()> {
-        self.serialize_i64(v as i64)
-    }
-
-    #[inline]
-    fn serialize_i64(&mut self, value: i64) -> Result<()> {
-        self.values.push(Value::I64(value));
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        self.state.push(try!(value.serialize(&mut *self.ser)));
         Ok(())
     }
 
     #[inline]
-    fn serialize_usize(&mut self, v: usize) -> Result<()> {
+    fn end(self) -> Result<Value> {
+        let var = try!(self.variant.serialize(&mut *self.ser));
+        let seq = Value::List(self.state);
+        Ok(Value::Tuple(vec![var, seq]))
+    }
+}
+
+pub struct SerializeMap<'a> {
+    ser: &'a mut Serializer,
+    variant: &'a str,
+    key: Option<HashableValue>,
+    state: BTreeMap<HashableValue, Value>,
+}
+
+impl<'a> ser::SerializeMap for SerializeMap<'a> {
+    type Ok = Value;
+    type Error = Error;
+
+    #[inline]
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<()> {
+        let key = try!(key.serialize(&mut *self.ser));
+        self.key = Some(try!(key.into_hashable()));
+        Ok(())
+    }
+
+    #[inline]
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+        let value = try!(value.serialize(&mut *self.ser));
+        let key = self.key.take().unwrap();
+        self.state.insert(key, value);
+        Ok(())
+    }
+
+    #[inline]
+    fn end(self) -> Result<Value> {
+        Ok(Value::Dict(self.state))
+    }
+}
+
+impl<'a> ser::SerializeStruct for SerializeMap<'a> {
+    type Ok = Value;
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
+        let key = try!(key.serialize(&mut *self.ser));
+        let key = try!(key.into_hashable());
+        let value = try!(value.serialize(&mut *self.ser));
+        self.state.insert(key, value);
+        Ok(())
+    }
+
+    #[inline]
+    fn end(self) -> Result<Value> {
+        Ok(Value::Dict(self.state))
+    }
+}
+
+impl<'a> ser::SerializeStructVariant for SerializeMap<'a> {
+    type Ok = Value;
+    type Error = Error;
+
+    #[inline]
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
+        ser::SerializeStruct::serialize_field(self, key, value)
+    }
+
+    #[inline]
+    fn end(self) -> Result<Value> {
+        let var = try!(self.variant.serialize(&mut *self.ser));
+        let map = Value::Dict(self.state);
+        Ok(Value::Tuple(vec![var, map]))
+    }
+}
+
+impl<'a> ser::Serializer for &'a mut Serializer {
+    type Ok = Value;
+    type Error = Error;
+
+    type SerializeSeq = SerializeSeq<'a>;
+    type SerializeTuple = Self::SerializeSeq;
+    type SerializeTupleStruct = Self::SerializeSeq;
+    type SerializeTupleVariant = SerializeTupleVariant<'a>;
+    type SerializeMap = SerializeMap<'a>;
+    type SerializeStruct = Self::SerializeMap;
+    type SerializeStructVariant = Self::SerializeMap;
+
+    #[inline]
+    fn serialize_bool(self, value: bool) -> Result<Value> {
+        Ok(Value::Bool(value))
+    }
+
+    #[inline]
+    fn serialize_i8(self, v: i8) -> Result<Value> {
+        self.serialize_i64(v as i64)
+    }
+
+    #[inline]
+    fn serialize_i16(self, v: i16) -> Result<Value> {
+        self.serialize_i64(v as i64)
+    }
+
+    #[inline]
+    fn serialize_i32(self, v: i32) -> Result<Value> {
+        self.serialize_i64(v as i64)
+    }
+
+    #[inline]
+    fn serialize_i64(self, value: i64) -> Result<Value> {
+        Ok(Value::I64(value))
+    }
+
+    #[inline]
+    fn serialize_u8(self, v: u8) -> Result<Value> {
         self.serialize_u64(v as u64)
     }
 
     #[inline]
-    fn serialize_u8(&mut self, v: u8) -> Result<()> {
+    fn serialize_u16(self, v: u16) -> Result<Value> {
         self.serialize_u64(v as u64)
     }
 
     #[inline]
-    fn serialize_u16(&mut self, v: u16) -> Result<()> {
+    fn serialize_u32(self, v: u32) -> Result<Value> {
         self.serialize_u64(v as u64)
     }
 
     #[inline]
-    fn serialize_u32(&mut self, v: u32) -> Result<()> {
-        self.serialize_u64(v as u64)
-    }
-
-    #[inline]
-    fn serialize_u64(&mut self, value: u64) -> Result<()> {
-        if value < 0x8000_0000_0000_0000 {
-            self.values.push(Value::I64(value as i64));
+    fn serialize_u64(self, value: u64) -> Result<Value> {
+        Ok(if value < 0x8000_0000_0000_0000 {
+            Value::I64(value as i64)
         } else {
-            self.values.push(Value::Int(BigInt::from(value)));
-        }
-        Ok(())
+            Value::Int(BigInt::from(value))
+        })
     }
 
     #[inline]
-    fn serialize_f32(&mut self, value: f32) -> Result<()> {
+    fn serialize_f32(self, value: f32) -> Result<Value> {
         self.serialize_f64(value as f64)
     }
 
     #[inline]
-    fn serialize_f64(&mut self, value: f64) -> Result<()> {
-        self.values.push(Value::F64(value));
-        Ok(())
+    fn serialize_f64(self, value: f64) -> Result<Value> {
+        Ok(Value::F64(value))
     }
 
     #[inline]
-    fn serialize_char(&mut self, value: char) -> Result<()> {
+    fn serialize_char(self, value: char) -> Result<Value> {
         let mut s = String::new();
         s.push(value);
-        self.values.push(Value::String(s));
-        Ok(())
+        Ok(Value::String(s))
     }
 
     #[inline]
-    fn serialize_str(&mut self, value: &str) -> Result<()> {
-        self.values.push(Value::String(String::from(value)));
-        Ok(())
+    fn serialize_str(self, value: &str) -> Result<Value> {
+        Ok(Value::String(String::from(value)))
     }
 
     #[inline]
-    fn serialize_bytes(&mut self, value: &[u8]) -> Result<()> {
-        self.values.push(Value::Bytes(value.to_vec()));
-        Ok(())
+    fn serialize_bytes(self, value: &[u8]) -> Result<Value> {
+        Ok(Value::Bytes(value.to_vec()))
     }
 
     #[inline]
-    fn serialize_none(&mut self) -> Result<()> {
+    fn serialize_unit(self) -> Result<Value> {
+        Ok(Value::None)
+    }
+
+    #[inline]
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Value> {
+        Ok(Value::Tuple(vec![]))
+    }
+
+    #[inline]
+    fn serialize_unit_variant(self, _name: &str, _variant_index: usize, variant: &str)
+                              -> Result<Value> {
+        Ok(Value::Tuple(vec![Value::String(variant.into())]))
+    }
+
+    #[inline]
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _name: &'static str, value: &T)
+                                                       -> Result<Value> {
+        value.serialize(self)
+    }
+
+    #[inline]
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &str, _variant_index: usize,
+                                                        variant: &str, value: &T) -> Result<Value> {
+        Ok(Value::Tuple(vec![Value::String(variant.into()),
+                             try!(to_value(&value))]))
+    }
+
+    #[inline]
+    fn serialize_none(self) -> Result<Value> {
         self.serialize_unit()
     }
 
     #[inline]
-    fn serialize_some<V: Serialize>(&mut self, value: V) -> Result<()> {
+    fn serialize_some<V: Serialize + ?Sized>(self, value: &V) -> Result<Value> {
         value.serialize(self)
     }
 
     #[inline]
-    fn serialize_unit(&mut self) -> Result<()> {
-        self.values.push(Value::None);
-        Ok(())
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
+        Ok(SerializeSeq { ser: self, state: vec![] })
     }
 
     #[inline]
-    fn serialize_unit_variant(&mut self, _name: &str, _variant_index: usize, variant: &str)
-                              -> Result<()> {
-        self.values.push(Value::Tuple(vec![Value::String(variant.into())]));
-        Ok(())
+    fn serialize_seq_fixed_size(self, len: usize) -> Result<Self::SerializeSeq> {
+        Ok(SerializeSeq { ser: self, state: Vec::with_capacity(len) })
     }
 
     #[inline]
-    fn serialize_newtype_variant<T: Serialize>(&mut self, _name: &str, _variant_index: usize,
-                                               variant: &str, value: T) -> Result<()> {
-        self.values.push(Value::Tuple(vec![Value::String(variant.into()),
-                                           try!(to_value(&value))]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_tuple_variant(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                               len: usize) -> Result<Serializer> {
-        try!(self.serialize_str(variant));
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
         self.serialize_seq_fixed_size(len)
     }
 
     #[inline]
-    fn serialize_tuple_variant_elt<T: Serialize>(&mut self, state: &mut Serializer,
-                                                 value: T) -> Result<()> {
-        self.serialize_seq_elt(state, value)
+    fn serialize_tuple_struct(self, _name: &'static str, len: usize)
+                              -> Result<Self::SerializeTupleStruct> {
+        self.serialize_seq_fixed_size(len)
     }
 
     #[inline]
-    fn serialize_tuple_variant_end(&mut self, state: Serializer) -> Result<()> {
-        try!(self.serialize_seq_end(state));
-        let seq = self.values.pop().unwrap();
-        let var = self.values.pop().unwrap();
-        self.values.push(Value::Tuple(vec![var, seq]));
-        Ok(())
+    fn serialize_tuple_variant(self, _name: &str, _variant_index: usize, variant: &'a str,
+                               len: usize) -> Result<Self::SerializeTupleVariant> {
+        Ok(SerializeTupleVariant { ser: self, variant: variant, state: Vec::with_capacity(len) })
     }
 
     #[inline]
-    fn serialize_struct_variant(&mut self, _name: &str, _variant_index: usize, variant: &str,
-                                len: usize) -> Result<Self::MapState> {
-        try!(self.serialize_str(variant));
-        self.serialize_map(Some(len))
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
+        Ok(SerializeMap { ser: self, variant: "", key: None, state: BTreeMap::new() })
     }
 
     #[inline]
-    fn serialize_struct_variant_elt<T: Serialize>(&mut self, state: &mut Self::MapState,
-                                                  key: &'static str, value: T) -> Result<()> {
-        try!(self.serialize_map_key(state, key));
-        self.serialize_map_value(state, value)
+    fn serialize_struct(self, _name: &'static str, _len: usize)
+                        -> Result<Self::SerializeStruct> {
+        Ok(SerializeMap { ser: self, variant: "", key: None, state: BTreeMap::new() })
     }
 
     #[inline]
-    fn serialize_struct_variant_end(&mut self, state: Self::MapState) -> Result<()> {
-        try!(self.serialize_map_end(state));
-        let map = self.values.pop().unwrap();
-        let var = self.values.pop().unwrap();
-        self.values.push(Value::Tuple(vec![var, map]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_struct(&mut self, _name: &'static str, len: usize) -> Result<Self::MapState> {
-        self.serialize_map(Some(len))
-    }
-
-    #[inline]
-    fn serialize_struct_elt<T: Serialize>(&mut self, state: &mut Self::MapState,
-                                          key: &'static str, value: T) -> Result<()> {
-        try!(self.serialize_map_key(state, key));
-        self.serialize_map_value(state, value)
-    }
-
-    #[inline]
-    fn serialize_struct_end(&mut self, state: Self::MapState) -> Result<()> {
-        self.serialize_map_end(state)
-    }
-
-    #[inline]
-    fn serialize_unit_struct(&mut self, _name: &'static str) -> Result<()> {
-        self.values.push(Value::Tuple(vec![]));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_newtype_struct<T: Serialize>(&mut self, _name: &'static str, value: T) -> Result<()> {
-        value.serialize(self)
-    }
-
-    #[inline]
-    fn serialize_tuple_struct(&mut self, _name: &'static str, len: usize) -> Result<Serializer> {
-        self.serialize_tuple(len)
-    }
-
-    #[inline]
-    fn serialize_tuple_struct_elt<T: Serialize>(&mut self, state: &mut Serializer, value: T) -> Result<()> {
-        self.serialize_tuple_elt(state, value)
-    }
-
-    #[inline]
-    fn serialize_tuple_struct_end(&mut self, state: Serializer) -> Result<()> {
-        self.serialize_tuple_end(state)
-    }
-
-    #[inline]
-    fn serialize_tuple(&mut self, _len: usize) -> Result<Serializer> {
-        Ok(Serializer::new())
-    }
-
-    #[inline]
-    fn serialize_tuple_elt<T: Serialize>(&mut self, state: &mut Serializer, value: T) -> Result<()> {
-        value.serialize(state)
-    }
-
-    #[inline]
-    fn serialize_tuple_end(&mut self, state: Serializer) -> Result<()> {
-        self.values.push(Value::Tuple(state.values));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_seq_fixed_size(&mut self, len: usize) -> Result<Serializer> {
-        self.serialize_seq(Some(len))
-    }
-
-    #[inline]
-    fn serialize_seq(&mut self, _len: Option<usize>) -> Result<Serializer> {
-        Ok(Serializer::new())
-    }
-
-    #[inline]
-    fn serialize_seq_elt<T: Serialize>(&mut self, state: &mut Serializer, value: T) -> Result<()> {
-        value.serialize(state)
-    }
-
-    #[inline]
-    fn serialize_seq_end(&mut self, state: Serializer) -> Result<()> {
-        self.values.push(Value::List(state.values));
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_map(&mut self, _len: Option<usize>) -> Result<Self::MapState> {
-        Ok((BTreeMap::new(), Serializer::new()))
-    }
-
-    #[inline]
-    fn serialize_map_key<T: Serialize>(&mut self, state: &mut Self::MapState, key: T) -> Result<()> {
-        key.serialize(&mut state.1)
-    }
-
-    #[inline]
-    fn serialize_map_value<T: Serialize>(&mut self, state: &mut Self::MapState, value: T) -> Result<()> {
-        try!(value.serialize(&mut state.1));
-        let value = state.1.values.pop().unwrap();
-        let key = try!(state.1.values.pop().unwrap().into_hashable());
-        state.0.insert(key, value);
-        Ok(())
-    }
-
-    #[inline]
-    fn serialize_map_end(&mut self, state: Self::MapState) -> Result<()> {
-        self.values.push(Value::Dict(state.0));
-        Ok(())
+    fn serialize_struct_variant(self, _name: &str, _variant_index: usize, variant: &'a str,
+                                _len: usize) -> Result<Self::SerializeStructVariant> {
+        Ok(SerializeMap { ser: self, variant: variant, key: None, state: BTreeMap::new() })
     }
 }
 
 
 /// Serialize any serde serializable object into a `value::Value`.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<Value> {
-    let mut ser = Serializer::new();
-    value.serialize(&mut ser).ok().unwrap();
-    ser.finish()
+    value.serialize(&mut Serializer)
 }
 
 /// Deserialize a `value::Value` from any serde deserializable object.
