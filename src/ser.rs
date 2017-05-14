@@ -495,7 +495,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     // Variant(T1, T2)     ('Variant', [T1, T2])
     // Variant { x: T }    ('Variant', {'x': T})
     #[inline]
-    fn serialize_unit_variant(self, _name: &str, _variant_index: usize, variant: &str)
+    fn serialize_unit_variant(self, _name: &str, _variant_index: u32, variant: &str)
                               -> Result<()> {
         try!(self.serialize_str(variant));
         self.write_opcode(TUPLE1)
@@ -508,7 +508,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &str,
-                                                        _variant_index: usize, variant: &str,
+                                                        _variant_index: u32, variant: &str,
                                                         value: &T) -> Result<()> {
         try!(self.serialize_str(variant));
         try!(value.serialize(&mut *self));
@@ -538,13 +538,6 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_seq_fixed_size(self, _len: usize) -> Result<Self::SerializeSeq> {
-        try!(self.write_opcode(EMPTY_LIST));
-        try!(self.write_opcode(MARK));
-        Ok(Compound { ser: self, state: Some(0) })
-    }
-
-    #[inline]
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
         if len == 0 {
             try!(self.write_opcode(EMPTY_TUPLE));
@@ -562,7 +555,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_tuple_variant(self, _name: &str, _variant_index: usize, variant: &str,
+    fn serialize_tuple_variant(self, _name: &str, _variant_index: u32, variant: &str,
                                _len: usize) -> Result<Self::SerializeTupleVariant> {
         try!(self.serialize_str(variant));
         try!(self.write_opcode(EMPTY_LIST));
@@ -588,7 +581,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_struct_variant(self, _name: &str, _variant_index: usize, variant: &str,
+    fn serialize_struct_variant(self, _name: &str, _variant_index: u32, variant: &str,
                                 len: usize) -> Result<Self::SerializeStructVariant> {
         try!(self.serialize_str(variant));
         self.serialize_map(Some(len))

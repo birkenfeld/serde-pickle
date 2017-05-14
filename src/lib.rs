@@ -41,7 +41,7 @@
 //! handle).  These functions, called `value_from_*` and `value_to_*`, will
 //! correctly (un)pickle these types.
 
-#![cfg_attr(test, feature(test))]
+// #![cfg_attr(test, feature(test))]
 
 #[macro_use]
 extern crate serde;
