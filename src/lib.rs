@@ -32,6 +32,11 @@
 //! * Sets and frozensets (Rust `HashSet<Value>`)
 //! * Dictionaries (Rust `HashMap<Value, Value>`)
 //!
+//! *Note:* since Serde 1.0, fixed-size Rust arrays (which have type `[T; n]` or
+//! `&[T; n]`) are treated as tuples when serializing.  In particular, this
+//! means that bytes literals will also be serialized as a tuple of integers
+//! unless you convert them into an unsized slice first (e.g. `&b"bytes"[..]`).
+//!
 //! # Exported API
 //!
 //! The library exports generic serde (de)serializing functions `to_*` and
@@ -41,7 +46,7 @@
 //! handle).  These functions, called `value_from_*` and `value_to_*`, will
 //! correctly (un)pickle these types.
 
-// #![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(test))]
 
 #[macro_use]
 extern crate serde;

@@ -91,8 +91,8 @@ mod struct_tests {
         assert_eq!(py_val, target);
     }
 
-    fn test_decode_ok<T>(pyvalue: Value, target: T)
-        where T: PartialEq + fmt::Debug + de::Deserialize,
+    fn test_decode_ok<'de, T>(pyvalue: Value, target: T)
+        where T: PartialEq + fmt::Debug + de::Deserialize<'de>,
     {
         // Test deserialization from pickle.
         let vec = value_to_vec(&pyvalue, true).unwrap();
@@ -114,10 +114,12 @@ mod struct_tests {
         test_encode_ok('ä', pyobj!(s="ä"));
         test_encode_ok("string", pyobj!(s="string"));
         // serde doesn't encode into bytes...
-        test_encode_ok(b"\x00\x01", pyobj!(l=[i=0, i=1]));
+        test_encode_ok(&b"\x00\x01"[..], pyobj!(l=[i=0, i=1]));
         test_encode_ok(vec![1, 2, 3], pyobj!(l=[i=1, i=2, i=3]));
         test_encode_ok((1, 2, 3), pyobj!(t=(i=1, i=2, i=3)));
-        test_encode_ok([1, 2, 3], pyobj!(l=[i=1, i=2, i=3]));
+        test_encode_ok(&[1, 2, 3][..], pyobj!(l=[i=1, i=2, i=3]));
+        // serde 1.0: fixed-size arrays are now tuples...
+        test_encode_ok([1, 2, 3], pyobj!(t=(i=1, i=2, i=3)));
         test_encode_ok(BTreeMap::from_iter(vec![(1, 2), (3, 4)]),
                        pyobj!(d={i=1 => i=2, i=3 => i=4}));
     }
@@ -125,7 +127,7 @@ mod struct_tests {
     #[test]
     fn encode_struct() {
         test_encode_ok(Unit,
-                       pyobj!(t=()));
+                       pyobj!(n=None));
         test_encode_ok(Newtype(42),
                        pyobj!(i=42));
         test_encode_ok(Tuple(42, false),
@@ -168,7 +170,7 @@ mod struct_tests {
 
     #[test]
     fn decode_struct() {
-        test_decode_ok(pyobj!(t=()),
+        test_decode_ok(pyobj!(n=None),
                        Unit);
         test_decode_ok(pyobj!(i=42),
                        Newtype(42));
@@ -300,7 +302,7 @@ mod value_tests {
             }
         ]"#).unwrap();
         let vec: Vec<_> = to_vec(&original, true).unwrap();
-        let tripped = from_slice(&vec).unwrap();
+        let tripped: serde_json::Value = from_slice(&vec).unwrap();
         assert_eq!(original, tripped);
     }
 }

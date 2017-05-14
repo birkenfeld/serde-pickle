@@ -1,6 +1,6 @@
 [package]
 name = "serde-pickle"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Georg Brandl <georg@python.org>"]
 license = "MIT/Apache-2.0"
 description = "A serde-based serialization library for Python's pickle format"
@@ -9,7 +9,7 @@ documentation = "http://birkenfeld.github.io/serde-pickle/serde_pickle/index.htm
 keywords = ["pickle", "python", "serde", "serialization"]
 
 [dependencies]
-serde = "1.0"
+serde = "1.0.2"
 byteorder = "1.0.0"
 num-bigint = "0.1.32"
 num-traits = "0.1.32"
@@ -17,7 +17,7 @@ iter-read = "0.1.0"
 
 # For the example binary and the test suite.
 [dev-dependencies]
-serde_derive = "1.0"
-serde_json = "1.0"
+serde_derive = "1.0.2"
+serde_json = "1.0.0"
 rand = "0.3.14"
-quickcheck = "0.3.1"
+quickcheck = "0.4.1"
