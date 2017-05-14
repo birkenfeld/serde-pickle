@@ -413,7 +413,7 @@ impl<R: Read> Deserializer<R> {
     fn push_memo_ref(&mut self, memo_id: MemoId) -> Result<()> {
         self.stack.push(Value::MemoRef(memo_id));
         match self.memo.get_mut(&memo_id) {
-            Some(&mut (_, ref mut count)) => { *count = *count + 1; Ok(()) }
+            Some(&mut (_, ref mut count)) => { *count += 1; Ok(()) }
             None => Err(Error::Eval(ErrorCode::MissingMemo(memo_id), self.pos)),
         }
     }
@@ -442,7 +442,7 @@ impl<R: Read> Deserializer<R> {
                     // We can't remove it from the memo here, since we haven't
                     // decoded the whole stream yet and there may be further
                     // references to the value.
-                    *count = *count - 1;
+                    *count -= 1;
                     val.clone()
                 })
             },
@@ -792,9 +792,9 @@ impl<R: Read> Deserializer<R> {
             Value::I64(v) => Ok(value::Value::I64(v)),
             Value::Int(v) => {
                 if let Some(i) = v.to_i64() {
-                    Ok((value::Value::I64(i)))
+                    Ok(value::Value::I64(i))
                 } else {
-                    Ok((value::Value::Int(v)))
+                    Ok(value::Value::Int(v))
                 }
             },
             Value::F64(v) => Ok(value::Value::F64(v)),

@@ -89,7 +89,7 @@ impl<W: io::Write> Serializer<W> {
                         try!(self.write_opcode(SETITEMS));
                         try!(self.write_opcode(MARK));
                     }
-                    try!(self.serialize_hashable_value(&key));
+                    try!(self.serialize_hashable_value(key));
                     try!(self.serialize_value(value));
                 }
                 try!(self.write_opcode(SETITEMS));
@@ -171,12 +171,12 @@ impl<W: io::Write> Serializer<W> {
     fn serialize_set(&mut self, items: &BTreeSet<HashableValue>, name: &[u8]) -> Result<()> {
         try!(self.write_opcode(GLOBAL));
         if self.use_proto_3 {
-            try!(self.writer.write(b"builtins\n"));
+            try!(self.writer.write_all(b"builtins\n"));
         } else {
-            try!(self.writer.write(b"__builtin__\n"));
+            try!(self.writer.write_all(b"__builtin__\n"));
         }
         try!(self.writer.write_all(name));
-        try!(self.writer.write(b"\n"));
+        try!(self.writer.write_all(b"\n"));
         try!(self.write_opcode(EMPTY_LIST));
         try!(self.write_opcode(MARK));
         for (n, item) in items.iter().enumerate() {
@@ -184,7 +184,7 @@ impl<W: io::Write> Serializer<W> {
                 try!(self.write_opcode(APPENDS));
                 try!(self.write_opcode(MARK));
             }
-            try!(self.serialize_hashable_value(&item));
+            try!(self.serialize_hashable_value(item));
         }
         try!(self.write_opcode(APPENDS));
         try!(self.write_opcode(TUPLE1));

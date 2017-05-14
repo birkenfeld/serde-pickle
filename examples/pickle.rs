@@ -30,12 +30,11 @@ fn main() {
         println!("from_json: encode pickle from json");
         exit(1);
     }
-    let reader: Box<Read>;
-    if args.len() == 3 {
-        reader = Box::new(File::open(&args[2]).unwrap());
+    let reader: Box<Read> = if args.len() == 3 {
+        Box::new(File::open(&args[2]).unwrap())
     } else {
-        reader = Box::new(stdin());
-    }
+        Box::new(stdin())
+    };
     match &*args[1] {
         "decode" => {
             let decoded: pickle::Value = pickle::value_from_reader(reader).unwrap();
