@@ -162,6 +162,16 @@ impl<'de> de::Deserialize<'de> for HashableValue {
             }
 
             #[inline]
+            fn visit_bytes<E: de::Error>(self, value: &[u8]) -> StdResult<HashableValue, E> {
+                self.visit_byte_buf(value.to_vec())
+            }
+
+            #[inline]
+            fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> StdResult<HashableValue, E> {
+                Ok(HashableValue::Bytes(value))
+            }
+
+            #[inline]
             fn visit_none<E>(self) -> StdResult<HashableValue, E> {
                 Ok(HashableValue::None)
             }
