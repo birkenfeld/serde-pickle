@@ -4,7 +4,7 @@ Serde Pickle Serialization Library
 [![Build status](https://api.travis-ci.org/birkenfeld/serde-pickle.png)](https://travis-ci.org/birkenfeld/serde-pickle)
 [![Latest Version](https://img.shields.io/crates/v/serde-pickle.svg)](https://crates.io/crates/serde-pickle)
 
-[Documentation](https://birkenfeld.github.io/serde-pickle/serde_pickle/index.html)
+[Documentation](https://docs.rs/serde-pickle)
 
 This crate is a Rust library for parsing and generating Python pickle
 streams. It is built upon [Serde](https://github.com/serde-rs/serde), a high
@@ -55,9 +55,4 @@ fn main() {
 
 Serializing and deserializing structs and enums that implement the
 serde-provided traits is supported, and works analogous to other crates
-(using either `serde_macros` or `serde_codegen`).
-
-Notes
-=====
-
-The test suite currently only works with the nightly-based `serde_macros`.
+(using `serde_derive`).
