@@ -8,6 +8,7 @@
 
 use std::i64;
 use num_bigint::BigInt;
+use super::rand::Rng;
 use super::quickcheck::{Arbitrary, Gen, empty_shrinker};
 use {Value, HashableValue};
 
