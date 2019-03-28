@@ -27,10 +27,7 @@ pub struct Serializer<W> {
 
 impl<W: io::Write> Serializer<W> {
     pub fn new(writer: W, use_proto_3: bool) -> Self {
-        Serializer {
-            writer: writer,
-            use_proto_3: use_proto_3,
-        }
+        Serializer { writer, use_proto_3 }
     }
 
     /// Unwrap the `Writer` from the `Serializer`.
@@ -120,13 +117,13 @@ impl<W: io::Write> Serializer<W> {
             while bytes.len() < n_bytes {
                 bytes.push(0x00);
             }
-            if bytes.last().unwrap() < &0x80 {
+            if *bytes.last().unwrap() < 0x80 {
                 bytes.push(0xff);
             }
             bytes
         } else {
             let mut bytes = i.to_bytes_le().1;
-            if bytes.last().unwrap() >= &0x80 {
+            if *bytes.last().unwrap() >= 0x80 {
                 bytes.push(0x00);
             }
             bytes
@@ -361,7 +358,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
             self.writer.write_i8(value).map_err(From::from)
         } else {
             self.write_opcode(BININT)?;
-            self.writer.write_i32::<LittleEndian>(value as i32).map_err(From::from)
+            self.writer.write_i32::<LittleEndian>(value.into()).map_err(From::from)
         }
     }
 
@@ -372,7 +369,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
             self.writer.write_i16::<LittleEndian>(value).map_err(From::from)
         } else {
             self.write_opcode(BININT)?;
-            self.writer.write_i32::<LittleEndian>(value as i32).map_err(From::from)
+            self.writer.write_i32::<LittleEndian>(value.into()).map_err(From::from)
         }
     }
 
@@ -440,7 +437,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_f32(self, value: f32) -> Result<()> {
         self.write_opcode(BINFLOAT)?;
         // Yes, this one is big endian.
-        self.writer.write_f64::<BigEndian>(value as f64).map_err(From::from)
+        self.writer.write_f64::<BigEndian>(value.into()).map_err(From::from)
     }
 
     #[inline]

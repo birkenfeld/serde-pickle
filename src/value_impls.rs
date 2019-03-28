@@ -243,7 +243,7 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
                 visitor.visit_seq(SeqDeserializer {
                     de: &mut self,
                     iter: v.into_iter(),
-                    len: len,
+                    len,
                 })
             },
             Value::Tuple(v) => {
@@ -267,7 +267,7 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
                     de: &mut self,
                     iter: v.into_iter(),
                     value: None,
-                    len: len,
+                    len,
                 })
             },
         }
@@ -574,17 +574,17 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     #[inline]
     fn serialize_i8(self, v: i8) -> Result<Value> {
-        self.serialize_i64(v as i64)
+        self.serialize_i64(v.into())
     }
 
     #[inline]
     fn serialize_i16(self, v: i16) -> Result<Value> {
-        self.serialize_i64(v as i64)
+        self.serialize_i64(v.into())
     }
 
     #[inline]
     fn serialize_i32(self, v: i32) -> Result<Value> {
-        self.serialize_i64(v as i64)
+        self.serialize_i64(v.into())
     }
 
     #[inline]
@@ -594,17 +594,17 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     #[inline]
     fn serialize_u8(self, v: u8) -> Result<Value> {
-        self.serialize_u64(v as u64)
+        self.serialize_u64(v.into())
     }
 
     #[inline]
     fn serialize_u16(self, v: u16) -> Result<Value> {
-        self.serialize_u64(v as u64)
+        self.serialize_u64(v.into())
     }
 
     #[inline]
     fn serialize_u32(self, v: u32) -> Result<Value> {
-        self.serialize_u64(v as u64)
+        self.serialize_u64(v.into())
     }
 
     #[inline]
@@ -618,7 +618,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     #[inline]
     fn serialize_f32(self, value: f32) -> Result<Value> {
-        self.serialize_f64(value as f64)
+        self.serialize_f64(value.into())
     }
 
     #[inline]
@@ -700,7 +700,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     #[inline]
     fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                len: usize) -> Result<Self::SerializeTupleVariant> {
-        Ok(SerializeTupleVariant { ser: self, variant: variant, state: Vec::with_capacity(len) })
+        Ok(SerializeTupleVariant { ser: self, variant, state: Vec::with_capacity(len) })
     }
 
     #[inline]
@@ -717,7 +717,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     #[inline]
     fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                 _len: usize) -> Result<Self::SerializeStructVariant> {
-        Ok(SerializeMap { ser: self, variant: variant, key: None, state: BTreeMap::new() })
+        Ok(SerializeMap { ser: self, variant, key: None, state: BTreeMap::new() })
     }
 }
 

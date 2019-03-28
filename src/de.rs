@@ -89,7 +89,7 @@ impl<R: Read> Deserializer<R> {
             memo: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
-            decode_strings: decode_strings,
+            decode_strings,
         }
     }
 
@@ -148,12 +148,12 @@ impl<R: Read> Deserializer<R> {
                 }
                 BINPUT => {
                     let memo_id = self.read_byte()?;
-                    self.memoize(memo_id as MemoId)?;
+                    self.memoize(memo_id.into())?;
                 }
                 LONG_BINPUT => {
                     let bytes = self.read_bytes(4)?;
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    self.memoize(memo_id as MemoId)?;
+                    self.memoize(memo_id)?;
                 }
                 MEMOIZE => {
                     let memo_id = self.memo.len();
@@ -167,13 +167,13 @@ impl<R: Read> Deserializer<R> {
                     self.push_memo_ref(memo_id)?;
                 }
                 BINGET => {
-                    let memo_id = self.read_byte()? as MemoId;
-                    self.push_memo_ref(memo_id)?;
+                    let memo_id = self.read_byte()?;
+                    self.push_memo_ref(memo_id.into())?;
                 }
                 LONG_BINGET => {
                     let bytes = self.read_bytes(4)?;
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    self.push_memo_ref(memo_id as MemoId)?;
+                    self.push_memo_ref(memo_id)?;
                 }
 
                 // Singletons
@@ -217,15 +217,15 @@ impl<R: Read> Deserializer<R> {
                 }
                 BININT => {
                     let bytes = self.read_bytes(4)?;
-                    self.stack.push(Value::I64(LittleEndian::read_i32(&bytes) as i64));
+                    self.stack.push(Value::I64(LittleEndian::read_i32(&bytes).into()));
                 }
                 BININT1 => {
                     let byte = self.read_byte()?;
-                    self.stack.push(Value::I64(byte as i64));
+                    self.stack.push(Value::I64(byte.into()));
                 }
                 BININT2 => {
                     let bytes = self.read_bytes(2)?;
-                    self.stack.push(Value::I64(LittleEndian::read_u16(&bytes) as i64));
+                    self.stack.push(Value::I64(LittleEndian::read_u16(&bytes).into()));
                 }
                 LONG1 => {
                     let bytes = self.read_u8_prefixed_bytes()?;
@@ -616,7 +616,7 @@ impl<R: Read> Deserializer<R> {
         if line.last() == Some(&b'L') { line.pop(); }
         match BigInt::parse_bytes(&line, 10) {
             Some(i)  => Ok(Value::Int(i)),
-            None => self.error(ErrorCode::InvalidLiteral(line.into()))
+            None => self.error(ErrorCode::InvalidLiteral(line))
         }
     }
 
@@ -721,7 +721,7 @@ impl<R: Read> Deserializer<R> {
         let negative = !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80 != 0);
         let mut val = BigInt::from_bytes_le(Sign::Plus, &bytes);
         if negative {
-            val = val - (BigInt::from(1) << (bytes.len() * 8));
+            val -= BigInt::from(1) << (bytes.len() * 8);
         }
         Value::Int(val)
     }
@@ -733,7 +733,8 @@ impl<R: Read> Deserializer<R> {
         let pos = self.pos;
         let top = self.top()?;
         if let Value::List(ref mut list) = *top {
-            Ok(f(list))
+            f(list);
+            Ok(())
         } else {
             Self::stack_error("list", top, pos)
         }
@@ -757,7 +758,8 @@ impl<R: Read> Deserializer<R> {
         let pos = self.pos;
         let top = self.top()?;
         if let Value::Dict(ref mut dict) = *top {
-            Ok(f(dict))
+            f(dict);
+            Ok(())
         } else {
             Self::stack_error("dict", top, pos)
         }
@@ -770,7 +772,8 @@ impl<R: Read> Deserializer<R> {
         let pos = self.pos;
         let top = self.top()?;
         if let Value::Set(ref mut set) = *top {
-            Ok(f(set))
+            f(set);
+            Ok(())
         } else {
             Self::stack_error("set", top, pos)
         }
@@ -794,13 +797,19 @@ impl<R: Read> Deserializer<R> {
         match global {
             Value::Global(Global::Set) => {
                 match self.resolve(argtuple.pop()) {
-                    Some(Value::List(items)) => Ok(self.stack.push(Value::Set(items))),
+                    Some(Value::List(items)) => {
+                        self.stack.push(Value::Set(items));
+                        Ok(())
+                    }
                     _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
                 }
             }
             Value::Global(Global::Frozenset) => {
                 match self.resolve(argtuple.pop()) {
-                    Some(Value::List(items)) => Ok(self.stack.push(Value::FrozenSet(items))),
+                    Some(Value::List(items)) => {
+                        self.stack.push(Value::FrozenSet(items));
+                        Ok(())
+                    }
                     _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
                 }
             }
@@ -920,7 +929,7 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
                 visitor.visit_seq(SeqAccess {
                     de: &mut self,
                     iter: v.into_iter(),
-                    len: len,
+                    len,
                 })
             },
             Value::Tuple(v) => {
@@ -943,7 +952,7 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
                     de: &mut self,
                     iter: v.into_iter(),
                     value: None,
-                    len: len,
+                    len,
                 })
             },
             Value::MemoRef(memo_id) => {
