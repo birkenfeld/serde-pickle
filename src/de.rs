@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -105,16 +105,16 @@ impl<R: Read> Deserializer<R> {
     /// pickle until the STOP opcode.
     fn parse_value(&mut self) -> Result<Value> {
         loop {
-            match try!(self.read_byte()) {
+            match self.read_byte()? {
                 // Specials
                 PROTO => {
                     // Ignore this, as it is only important for instances (read
                     // the version byte).
-                    try!(self.read_byte());
+                    self.read_byte()?;
                 }
                 FRAME => {
                     // We'll ignore framing. But we still have to gobble up the length.
-                    try!(self.read_bytes(8));
+                    self.read_bytes(8)?;
                 }
                 STOP => return self.pop(),
                 MARK => {
@@ -123,48 +123,48 @@ impl<R: Read> Deserializer<R> {
                 }
                 POP => {
                     if self.stack.is_empty() {
-                        try!(self.pop_mark());
+                        self.pop_mark()?;
                     } else {
-                        try!(self.pop());
+                        self.pop()?;
                     }
                 },
-                POP_MARK => { try!(self.pop_mark()); },
-                DUP => { let top = try!(self.top()).clone(); self.stack.push(top); },
+                POP_MARK => { self.pop_mark()?; },
+                DUP => { let top = self.top()?.clone(); self.stack.push(top); },
 
                 // Memo saving ops
                 PUT => {
-                    let bytes = try!(self.read_line());
-                    let memo_id = try!(self.parse_ascii(bytes));
-                    try!(self.memoize(memo_id));
+                    let bytes = self.read_line()?;
+                    let memo_id = self.parse_ascii(bytes)?;
+                    self.memoize(memo_id)?;
                 }
                 BINPUT => {
-                    let memo_id = try!(self.read_byte());
-                    try!(self.memoize(memo_id as MemoId));
+                    let memo_id = self.read_byte()?;
+                    self.memoize(memo_id as MemoId)?;
                 }
                 LONG_BINPUT => {
-                    let bytes = try!(self.read_bytes(4));
+                    let bytes = self.read_bytes(4)?;
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    try!(self.memoize(memo_id as MemoId));
+                    self.memoize(memo_id as MemoId)?;
                 }
                 MEMOIZE => {
                     let memo_id = self.memo.len();
-                    try!(self.memoize(memo_id as MemoId));
+                    self.memoize(memo_id as MemoId)?;
                 }
 
                 // Memo getting ops
                 GET => {
-                    let bytes = try!(self.read_line());
-                    let memo_id = try!(self.parse_ascii(bytes));
-                    try!(self.push_memo_ref(memo_id));
+                    let bytes = self.read_line()?;
+                    let memo_id = self.parse_ascii(bytes)?;
+                    self.push_memo_ref(memo_id)?;
                 }
                 BINGET => {
-                    let memo_id = try!(self.read_byte()) as MemoId;
-                    try!(self.push_memo_ref(memo_id));
+                    let memo_id = self.read_byte()? as MemoId;
+                    self.push_memo_ref(memo_id)?;
                 }
                 LONG_BINGET => {
-                    let bytes = try!(self.read_bytes(4));
+                    let bytes = self.read_bytes(4)?;
                     let memo_id = LittleEndian::read_u32(&bytes);
-                    try!(self.push_memo_ref(memo_id as MemoId));
+                    self.push_memo_ref(memo_id as MemoId)?;
                 }
 
                 // Singletons
@@ -174,193 +174,193 @@ impl<R: Read> Deserializer<R> {
 
                 // ASCII-formatted numbers
                 INT => {
-                    let line = try!(self.read_line());
-                    let val = try!(self.decode_text_int(line));
+                    let line = self.read_line()?;
+                    let val = self.decode_text_int(line)?;
                     self.stack.push(val);
                 }
                 LONG => {
-                    let line = try!(self.read_line());
-                    let long = try!(self.decode_text_long(line));
+                    let line = self.read_line()?;
+                    let long = self.decode_text_long(line)?;
                     self.stack.push(long);
                 }
                 FLOAT => {
-                    let line = try!(self.read_line());
-                    let f = try!(self.parse_ascii(line));
+                    let line = self.read_line()?;
+                    let f = self.parse_ascii(line)?;
                     self.stack.push(Value::F64(f));
                 }
 
                 // ASCII-formatted strings
                 STRING => {
-                    let line = try!(self.read_line());
-                    let string = try!(self.decode_escaped_string(&line));
+                    let line = self.read_line()?;
+                    let string = self.decode_escaped_string(&line)?;
                     self.stack.push(string);
                 }
                 UNICODE => {
-                    let line = try!(self.read_line());
-                    let string = try!(self.decode_escaped_unicode(&line));
+                    let line = self.read_line()?;
+                    let string = self.decode_escaped_unicode(&line)?;
                     self.stack.push(string);
                 }
 
                 // Binary-coded numbers
                 BINFLOAT => {
-                    let bytes = try!(self.read_bytes(8));
+                    let bytes = self.read_bytes(8)?;
                     self.stack.push(Value::F64(BigEndian::read_f64(&bytes)));
                 }
                 BININT => {
-                    let bytes = try!(self.read_bytes(4));
+                    let bytes = self.read_bytes(4)?;
                     self.stack.push(Value::I64(LittleEndian::read_i32(&bytes) as i64));
                 }
                 BININT1 => {
-                    let byte = try!(self.read_byte());
+                    let byte = self.read_byte()?;
                     self.stack.push(Value::I64(byte as i64));
                 }
                 BININT2 => {
-                    let bytes = try!(self.read_bytes(2));
+                    let bytes = self.read_bytes(2)?;
                     self.stack.push(Value::I64(LittleEndian::read_u16(&bytes) as i64));
                 }
                 LONG1 => {
-                    let bytes = try!(self.read_u8_prefixed_bytes());
+                    let bytes = self.read_u8_prefixed_bytes()?;
                     let long = self.decode_binary_long(bytes);
                     self.stack.push(long);
                 }
                 LONG4 => {
-                    let bytes = try!(self.read_i32_prefixed_bytes());
+                    let bytes = self.read_i32_prefixed_bytes()?;
                     let long = self.decode_binary_long(bytes);
                     self.stack.push(long);
                 }
 
                 // Length-prefixed (byte)strings
                 SHORT_BINBYTES => {
-                    let string = try!(self.read_u8_prefixed_bytes());
+                    let string = self.read_u8_prefixed_bytes()?;
                     self.stack.push(Value::Bytes(string));
                 }
                 BINBYTES => {
-                    let string = try!(self.read_u32_prefixed_bytes());
+                    let string = self.read_u32_prefixed_bytes()?;
                     self.stack.push(Value::Bytes(string));
                 }
                 BINBYTES8 => {
-                    let string = try!(self.read_u64_prefixed_bytes());
+                    let string = self.read_u64_prefixed_bytes()?;
                     self.stack.push(Value::Bytes(string));
                 }
                 SHORT_BINSTRING => {
-                    let string = try!(self.read_u8_prefixed_bytes());
-                    let decoded = try!(self.decode_string(string));
+                    let string = self.read_u8_prefixed_bytes()?;
+                    let decoded = self.decode_string(string)?;
                     self.stack.push(decoded);
                 }
                 BINSTRING => {
-                    let string = try!(self.read_i32_prefixed_bytes());
-                    let decoded = try!(self.decode_string(string));
+                    let string = self.read_i32_prefixed_bytes()?;
+                    let decoded = self.decode_string(string)?;
                     self.stack.push(decoded);
                 }
                 SHORT_BINUNICODE => {
-                    let string = try!(self.read_u8_prefixed_bytes());
-                    let decoded = try!(self.decode_unicode(string));
+                    let string = self.read_u8_prefixed_bytes()?;
+                    let decoded = self.decode_unicode(string)?;
                     self.stack.push(decoded);
                 }
                 BINUNICODE => {
-                    let string = try!(self.read_u32_prefixed_bytes());
-                    let decoded = try!(self.decode_unicode(string));
+                    let string = self.read_u32_prefixed_bytes()?;
+                    let decoded = self.decode_unicode(string)?;
                     self.stack.push(decoded);
                 }
                 BINUNICODE8 => {
-                    let string = try!(self.read_u64_prefixed_bytes());
-                    let decoded = try!(self.decode_unicode(string));
+                    let string = self.read_u64_prefixed_bytes()?;
+                    let decoded = self.decode_unicode(string)?;
                     self.stack.push(decoded);
                 }
 
                 // Tuples
                 EMPTY_TUPLE => self.stack.push(Value::Tuple(Vec::new())),
                 TUPLE1 => {
-                    let item = try!(self.pop());
+                    let item = self.pop()?;
                     self.stack.push(Value::Tuple(vec![item]));
                  }
                  TUPLE2 => {
-                    let item2 = try!(self.pop());
-                    let item1 = try!(self.pop());
+                    let item2 = self.pop()?;
+                    let item1 = self.pop()?;
                     self.stack.push(Value::Tuple(vec![item1, item2]));
                  }
                  TUPLE3 => {
-                    let item3 = try!(self.pop());
-                    let item2 = try!(self.pop());
-                    let item1 = try!(self.pop());
+                    let item3 = self.pop()?;
+                    let item2 = self.pop()?;
+                    let item1 = self.pop()?;
                     self.stack.push(Value::Tuple(vec![item1, item2, item3]));
                 }
                 TUPLE => {
-                    let items = try!(self.pop_mark());
+                    let items = self.pop_mark()?;
                     self.stack.push(Value::Tuple(items));
                 }
 
                 // Lists
                 EMPTY_LIST => self.stack.push(Value::List(Vec::new())),
                 LIST => {
-                    let items = try!(self.pop_mark());
+                    let items = self.pop_mark()?;
                     self.stack.push(Value::List(items));
                 }
                 APPEND => {
-                    let value = try!(self.pop());
-                    try!(self.modify_list(|list| list.push(value)));
+                    let value = self.pop()?;
+                    self.modify_list(|list| list.push(value))?;
                 }
                 APPENDS => {
-                    let items = try!(self.pop_mark());
-                    try!(self.modify_list(|list| list.extend(items)));
+                    let items = self.pop_mark()?;
+                    self.modify_list(|list| list.extend(items))?;
                 }
 
                 // Dicts
                 EMPTY_DICT => self.stack.push(Value::Dict(Vec::new())),
                 DICT => {
-                    let items = try!(self.pop_mark());
+                    let items = self.pop_mark()?;
                     let mut dict = Vec::with_capacity(items.len() / 2);
                     Self::extend_dict(&mut dict, items);
                     self.stack.push(Value::Dict(dict));
                 }
                 SETITEM => {
-                    let value = try!(self.pop());
-                    let key = try!(self.pop());
-                    try!(self.modify_dict(|dict| dict.push((key, value))));
+                    let value = self.pop()?;
+                    let key = self.pop()?;
+                    self.modify_dict(|dict| dict.push((key, value)))?;
                 }
                 SETITEMS => {
-                    let items = try!(self.pop_mark());
-                    try!(self.modify_dict(|dict| Self::extend_dict(dict, items)));
+                    let items = self.pop_mark()?;
+                    self.modify_dict(|dict| Self::extend_dict(dict, items))?;
                 }
 
                 // Sets and frozensets
                 EMPTY_SET => self.stack.push(Value::Set(Vec::new())),
                 FROZENSET => {
-                    let items = try!(self.pop_mark());
+                    let items = self.pop_mark()?;
                     self.stack.push(Value::FrozenSet(items));
                 }
                 ADDITEMS => {
-                    let items = try!(self.pop_mark());
-                    try!(self.modify_set(|set| set.extend(items)));
+                    let items = self.pop_mark()?;
+                    self.modify_set(|set| set.extend(items))?;
                 }
 
                 // Arbitrary module globals, used here for unpickling set and frozenset
                 // from protocols < 4
                 GLOBAL => {
-                    let modname = try!(self.read_line());
-                    let globname = try!(self.read_line());
-                    let value = try!(self.decode_global(modname, globname));
+                    let modname = self.read_line()?;
+                    let globname = self.read_line()?;
+                    let value = self.decode_global(modname, globname)?;
                     self.stack.push(value);
                 }
                 STACK_GLOBAL => {
-                    let globname = match try!(self.pop()) {
+                    let globname = match self.pop()? {
                         Value::String(string) => string.into_bytes(),
                         other => return Self::stack_error("string", &other, self.pos),
                     };
-                    let modname = match try!(self.pop()) {
+                    let modname = match self.pop()? {
                         Value::String(string) => string.into_bytes(),
                         other => return Self::stack_error("string", &other, self.pos),
                     };
-                    let value = try!(self.decode_global(modname, globname));
+                    let value = self.decode_global(modname, globname)?;
                     self.stack.push(value);
                 }
                 REDUCE => {
-                    let argtuple = match try!(self.pop_resolve()) {
+                    let argtuple = match self.pop_resolve()? {
                         Value::Tuple(args) => args,
                         other => return Self::stack_error("tuple", &other, self.pos),
                     };
-                    let global = try!(self.pop_resolve());
-                    try!(self.reduce_global(global, argtuple));
+                    let global = self.pop_resolve()?;
+                    self.reduce_global(global, argtuple)?;
                 }
 
                 // Unsupported (mostly class instance building) opcodes
@@ -421,7 +421,7 @@ impl<R: Read> Deserializer<R> {
     // Memoize the current stack top with the given ID.  Moves the actual
     // object into the memo, and saves a reference on the stack instead.
     fn memoize(&mut self, memo_id: MemoId) -> Result<()> {
-        let mut item = try!(self.pop());
+        let mut item = self.pop()?;
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
             item = match self.memo.get(&id) {
@@ -516,7 +516,7 @@ impl<R: Read> Deserializer<R> {
     }
 
     fn read_i32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = try!(self.read_bytes(4));
+        let lenbytes = self.read_bytes(4)?;
         match LittleEndian::read_i32(&lenbytes) {
             0          => Ok(vec![]),
             l if l < 0 => self.error(ErrorCode::NegativeLength),
@@ -525,17 +525,17 @@ impl<R: Read> Deserializer<R> {
     }
 
     fn read_u64_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = try!(self.read_bytes(8));
+        let lenbytes = self.read_bytes(8)?;
         self.read_bytes(LittleEndian::read_u64(&lenbytes) as usize)
     }
 
     fn read_u32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = try!(self.read_bytes(4));
+        let lenbytes = self.read_bytes(4)?;
         self.read_bytes(LittleEndian::read_u32(&lenbytes) as usize)
     }
 
     fn read_u8_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbyte = try!(self.read_byte());
+        let lenbyte = self.read_byte()?;
         self.read_bytes(lenbyte as usize)
     }
 
@@ -555,7 +555,7 @@ impl<R: Read> Deserializer<R> {
         } else if line == b"01" {
             Value::Bool(true)
         } else {
-            let i = try!(self.parse_ascii(line));
+            let i = self.parse_ascii(line)?;
             Value::I64(i)
         })
     }
@@ -681,7 +681,7 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<Value>)
     {
         let pos = self.pos;
-        let top = try!(self.top());
+        let top = self.top()?;
         if let Value::List(ref mut list) = *top {
             Ok(f(list))
         } else {
@@ -705,7 +705,7 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<(Value, Value)>)
     {
         let pos = self.pos;
-        let top = try!(self.top());
+        let top = self.top()?;
         if let Value::Dict(ref mut dict) = *top {
             Ok(f(dict))
         } else {
@@ -718,7 +718,7 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<Value>)
     {
         let pos = self.pos;
-        let top = try!(self.top());
+        let top = self.top()?;
         if let Value::Set(ref mut set) = *top {
             Ok(f(set))
         } else {
@@ -801,28 +801,32 @@ impl<R: Read> Deserializer<R> {
             Value::Bytes(v) => Ok(value::Value::Bytes(v)),
             Value::String(v) => Ok(value::Value::String(v)),
             Value::List(v) => {
-                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
-                Ok(value::Value::List(new))
+                let new = v.into_iter().map(|v| self.deserialize_value(v))
+                                       .collect::<Result<_>>();
+                Ok(value::Value::List(new?))
             },
             Value::Tuple(v) => {
-                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)).collect());
-                Ok(value::Value::Tuple(new))
+                let new = v.into_iter().map(|v| self.deserialize_value(v))
+                                       .collect::<Result<_>>();
+                Ok(value::Value::Tuple(new?))
             },
             Value::Set(v) => {
-                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                 .and_then(|rv| rv.into_hashable())).collect());
-                Ok(value::Value::Set(new))
+                let new = v.into_iter().map(|v| self.deserialize_value(v)
+                                            .and_then(|rv| rv.into_hashable()))
+                                       .collect::<Result<_>>();
+                Ok(value::Value::Set(new?))
             },
             Value::FrozenSet(v) => {
-                let new = try!(v.into_iter().map(|v| self.deserialize_value(v)
-                                                 .and_then(|rv| rv.into_hashable())).collect());
-                Ok(value::Value::FrozenSet(new))
+                let new = v.into_iter().map(|v| self.deserialize_value(v)
+                                            .and_then(|rv| rv.into_hashable()))
+                                       .collect::<Result<_>>();
+                Ok(value::Value::FrozenSet(new?))
             },
             Value::Dict(v) => {
                 let mut map = BTreeMap::new();
                 for (key, value) in v {
-                    let real_key = try!(self.deserialize_value(key).and_then(|rv| rv.into_hashable()));
-                    let real_value = try!(self.deserialize_value(value));
+                    let real_key = self.deserialize_value(key).and_then(|rv| rv.into_hashable())?;
+                    let real_value = self.deserialize_value(value)?;
                     map.insert(real_key, real_value);
                 }
                 Ok(value::Value::Dict(map))
@@ -839,7 +843,7 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> Result<V::Value> {
-        let value = try!(self.get_next_value());
+        let value = self.get_next_value()?;
         match value {
             Value::None => visitor.visit_unit(),
             Value::Bool(v) => visitor.visit_bool(v),
@@ -897,7 +901,7 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
 
     #[inline]
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        let value = try!(self.get_next_value());
+        let value = self.get_next_value()?;
         match value {
             Value::None => visitor.visit_none(),
             _           => {
@@ -934,18 +938,18 @@ impl<'de: 'a, 'a, R: Read + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
     type Variant = Self;
 
     fn variant_seed<V: de::DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self)> {
-        let value = try!(self.de.get_next_value());
+        let value = self.de.get_next_value()?;
         match value {
             Value::Tuple(mut v) => {
                 if v.len() == 2 {
                     let args = v.pop();
                     self.de.value = v.pop();
-                    let val = try!(seed.deserialize(&mut *self.de));
+                    let val = seed.deserialize(&mut *self.de)?;
                     self.de.value = args;
                     Ok((val, self))
                 } else {
                     self.de.value = v.pop();
-                    let val = try!(seed.deserialize(&mut *self.de));
+                    let val = seed.deserialize(&mut *self.de)?;
                     Ok((val, self))
                 }
             }
@@ -988,7 +992,7 @@ impl<'de: 'a, 'a, R: Read> de::SeqAccess<'de> for SeqAccess<'a, R> {
             Some(value) => {
                 self.len -= 1;
                 self.de.value = Some(value);
-                Ok(Some(try!(seed.deserialize(&mut *self.de))))
+                Ok(Some(seed.deserialize(&mut *self.de)?))
             }
             None => Ok(None),
         }
@@ -1015,7 +1019,7 @@ impl<'de: 'a, 'a, R: Read> de::MapAccess<'de> for MapAccess<'a, R> {
                 self.len -= 1;
                 self.value = Some(value);
                 self.de.value = Some(key);
-                Ok(Some(try!(seed.deserialize(&mut *self.de))))
+                Ok(Some(seed.deserialize(&mut *self.de)?))
             }
             None => Ok(None),
         }
@@ -1024,7 +1028,7 @@ impl<'de: 'a, 'a, R: Read> de::MapAccess<'de> for MapAccess<'a, R> {
     fn next_value_seed<T: de::DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value> {
         let value = self.value.take().unwrap();
         self.de.value = Some(value);
-        Ok(try!(seed.deserialize(&mut *self.de)))
+        Ok(seed.deserialize(&mut *self.de)?)
     }
 
     fn size_hint(&self) -> Option<usize> {
@@ -1036,9 +1040,9 @@ impl<'de: 'a, 'a, R: Read> de::MapAccess<'de> for MapAccess<'a, R> {
 /// Decodes a value from a `std::io::Read`.
 pub fn from_reader<'de, R: io::Read, T: de::Deserialize<'de>>(rdr: R) -> Result<T> {
     let mut de = Deserializer::new(rdr, false);
-    let value = try!(de::Deserialize::deserialize(&mut de));
+    let value = de::Deserialize::deserialize(&mut de)?;
     // Make sure the whole stream has been consumed.
-    try!(de.end());
+    de.end()?;
     Ok(value)
 }
 
@@ -1055,9 +1059,9 @@ pub fn from_iter<'de, E: IterReadItem, I: Iterator<Item=E>, T: de::Deserialize<'
 /// Decodes a value from a `std::io::Read`.
 pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
     let mut de = Deserializer::new(rdr, false);
-    let intermediate_value = try!(de.parse_value());
-    let value = try!(de.deserialize_value(intermediate_value));
-    try!(de.end());
+    let intermediate_value = de.parse_value()?;
+    let value = de.deserialize_value(intermediate_value)?;
+    de.end()?;
     Ok(value)
 }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -130,12 +130,12 @@ fn write_elements<'a, I, T>(f: &mut fmt::Formatter, it: I,
                             len: usize, always_comma: bool) -> fmt::Result
     where I: Iterator<Item=&'a T>, T: fmt::Display + 'a
 {
-    try!(f.write_str(prefix));
+    f.write_str(prefix)?;
     for (i, item) in it.enumerate() {
         if i < len - 1 || always_comma {
-            try!(write!(f, "{}, ", item));
+            write!(f, "{}, ", item)?;
         } else {
-            try!(write!(f, "{}", item));
+            write!(f, "{}", item)?;
         }
     }
     f.write_str(suffix)
@@ -161,12 +161,12 @@ impl fmt::Display for Value {
                 write_elements(f, v.iter(), "{", "}", v.len(), false)
             },
             Value::Dict(ref v) => {
-                try!(write!(f, "{{"));
+                write!(f, "{{")?;
                 for (i, (key, value)) in v.iter().enumerate() {
                     if i < v.len() - 1 {
-                        try!(write!(f, "{}: {}, ", key, value));
+                        write!(f, "{}: {}, ", key, value)?;
                     } else {
-                        try!(write!(f, "{}: {}", key, value));
+                        write!(f, "{}: {}", key, value)?;
                     }
                 }
                 write!(f, "}}")

@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -94,7 +94,7 @@ impl<'de> de::Deserialize<'de> for Value {
             #[inline]
             fn visit_seq<V: de::SeqAccess<'de>>(self, mut visitor: V) -> StdResult<Value, V::Error> {
                 let mut values = Vec::new();
-                while let Some(elem) = try!(visitor.next_element()) {
+                while let Some(elem) = visitor.next_element()? {
                     values.push(elem);
                 }
                 Ok(Value::List(values))
@@ -103,7 +103,7 @@ impl<'de> de::Deserialize<'de> for Value {
             #[inline]
             fn visit_map<V: de::MapAccess<'de>>(self, mut visitor: V) -> StdResult<Value, V::Error> {
                 let mut values = BTreeMap::new();
-                while let Some((key, value)) = try!(visitor.next_entry()) {
+                while let Some((key, value)) = visitor.next_entry()? {
                     values.insert(key, value);
                 }
                 Ok(Value::Dict(values))
@@ -189,7 +189,7 @@ impl<'de> de::Deserialize<'de> for HashableValue {
             #[inline]
             fn visit_seq<V: de::SeqAccess<'de>>(self, mut visitor: V) -> StdResult<HashableValue, V::Error> {
                 let mut values = Vec::new();
-                while let Some(elem) = try!(visitor.next_element()) {
+                while let Some(elem) = visitor.next_element()? {
                     values.push(elem);
                 }
                 Ok(HashableValue::Tuple(values))
@@ -310,12 +310,12 @@ impl<'de: 'a, 'a> de::EnumAccess<'de> for &'a mut Deserializer {
                 if v.len() == 2 {
                     let args = v.pop();
                     self.value = v.pop();
-                    let res = try!(seed.deserialize(&mut *self));
+                    let res = seed.deserialize(&mut *self)?;
                     self.value = args;
                     Ok((res, self))
                 } else {
                     self.value = v.pop();
-                    let res = try!(seed.deserialize(&mut *self));
+                    let res = seed.deserialize(&mut *self)?;
                     Ok((res, self))
                 }
             }
@@ -358,7 +358,7 @@ impl<'de: 'a, 'a> de::SeqAccess<'de> for SeqDeserializer<'a> {
             Some(value) => {
                 self.len -= 1;
                 self.de.value = Some(value);
-                Ok(Some(try!(seed.deserialize(&mut *self.de))))
+                Ok(Some(seed.deserialize(&mut *self.de)?))
             }
             None => Ok(None),
         }
@@ -385,7 +385,7 @@ impl<'de: 'a, 'a> de::MapAccess<'de> for MapDeserializer<'a> {
                 self.len -= 1;
                 self.value = Some(value);
                 self.de.value = Some(key.into_value());
-                Ok(Some(try!(seed.deserialize(&mut *self.de))))
+                Ok(Some(seed.deserialize(&mut *self.de)?))
             }
             None => Ok(None),
         }
@@ -394,7 +394,7 @@ impl<'de: 'a, 'a> de::MapAccess<'de> for MapDeserializer<'a> {
     fn next_value_seed<T: de::DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value> {
         let value = self.value.take().unwrap();
         self.de.value = Some(value);
-        Ok(try!(seed.deserialize(&mut *self.de)))
+        Ok(seed.deserialize(&mut *self.de)?)
     }
 
     fn size_hint(&self) -> Option<usize> {
@@ -423,7 +423,7 @@ impl<'a> ser::SerializeSeq for SerializeSeq<'a> {
 
     #[inline]
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
-        self.state.push(try!(value.serialize(&mut *self.ser)));
+        self.state.push(value.serialize(&mut *self.ser)?);
         Ok(())
     }
 
@@ -475,13 +475,13 @@ impl<'a> ser::SerializeTupleVariant for SerializeTupleVariant<'a> {
 
     #[inline]
     fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
-        self.state.push(try!(value.serialize(&mut *self.ser)));
+        self.state.push(value.serialize(&mut *self.ser)?);
         Ok(())
     }
 
     #[inline]
     fn end(self) -> Result<Value> {
-        let var = try!(self.variant.serialize(&mut *self.ser));
+        let var = self.variant.serialize(&mut *self.ser)?;
         let seq = Value::List(self.state);
         Ok(Value::Tuple(vec![var, seq]))
     }
@@ -500,14 +500,14 @@ impl<'a> ser::SerializeMap for SerializeMap<'a> {
 
     #[inline]
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<()> {
-        let key = try!(key.serialize(&mut *self.ser));
-        self.key = Some(try!(key.into_hashable()));
+        let key = key.serialize(&mut *self.ser)?;
+        self.key = Some(key.into_hashable()?);
         Ok(())
     }
 
     #[inline]
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
-        let value = try!(value.serialize(&mut *self.ser));
+        let value = value.serialize(&mut *self.ser)?;
         let key = self.key.take().unwrap();
         self.state.insert(key, value);
         Ok(())
@@ -525,9 +525,9 @@ impl<'a> ser::SerializeStruct for SerializeMap<'a> {
 
     #[inline]
     fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
-        let key = try!(key.serialize(&mut *self.ser));
-        let key = try!(key.into_hashable());
-        let value = try!(value.serialize(&mut *self.ser));
+        let key = key.serialize(&mut *self.ser)?;
+        let key = key.into_hashable()?;
+        let value = value.serialize(&mut *self.ser)?;
         self.state.insert(key, value);
         Ok(())
     }
@@ -549,7 +549,7 @@ impl<'a> ser::SerializeStructVariant for SerializeMap<'a> {
 
     #[inline]
     fn end(self) -> Result<Value> {
-        let var = try!(self.variant.serialize(&mut *self.ser));
+        let var = self.variant.serialize(&mut *self.ser)?;
         let map = Value::Dict(self.state);
         Ok(Value::Tuple(vec![var, map]))
     }
@@ -668,8 +668,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     #[inline]
     fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str, _variant_index: u32,
                                                         variant: &'static str, value: &T) -> Result<Value> {
-        Ok(Value::Tuple(vec![Value::String(variant.into()),
-                             try!(to_value(&value))]))
+        Ok(Value::Tuple(vec![Value::String(variant.into()), to_value(&value)?]))
     }
 
     #[inline]

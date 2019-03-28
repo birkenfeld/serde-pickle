@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2017 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -73,7 +73,7 @@ pub use self::de::{
     from_iter,
     value_from_reader,
     value_from_slice,
-    value_from_iter
+    value_from_iter,
 };
 
 pub use self::value::{
