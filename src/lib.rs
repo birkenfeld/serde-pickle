@@ -32,6 +32,10 @@
 //! * Sets and frozensets (Rust `HashSet<Value>`)
 //! * Dictionaries (Rust `HashMap<Value, Value>`)
 //!
+//! When deserializing, arbitrary Python objects saved using a pickled instance
+//! dictionary or `__setstate__` are replaced by that state, since version
+//! 0.5 of this library.
+//!
 //! *Note:* since Serde 1.0, fixed-size Rust arrays (which have type `[T; n]` or
 //! `&[T; n]`) are treated as tuples when serializing.  In particular, this
 //! means that bytes literals will also be serialized as a tuple of integers

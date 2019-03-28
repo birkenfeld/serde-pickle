@@ -36,6 +36,7 @@ enum Global {
     Set,         // builtins/__builtin__.set
     Frozenset,   // builtins/__builtin__.frozenset
     Encode,      // _codecs.encode
+    Other,       // anything else (may be a classobj that is later discarded)
 }
 
 /// Our intermediate representation of a value.
@@ -90,6 +91,14 @@ impl<R: Read> Deserializer<R> {
             stacks: Vec::with_capacity(16),
             decode_strings: decode_strings,
         }
+    }
+
+    /// Decode a Value from this pickle.  This is different from going through
+    /// the generic serde `deserialize`, since it preserves some types that are
+    /// not in the serde data model, such as big integers.
+    pub fn deserialize_value(&mut self) -> Result<value::Value> {
+        let internal_value = self.parse_value()?;
+        self.convert_value(internal_value)
     }
 
     /// Get the next value to deserialize, either by parsing the pickle stream
@@ -343,11 +352,11 @@ impl<R: Read> Deserializer<R> {
                     self.stack.push(value);
                 }
                 STACK_GLOBAL => {
-                    let globname = match self.pop()? {
+                    let globname = match self.pop_resolve()? {
                         Value::String(string) => string.into_bytes(),
                         other => return Self::stack_error("string", &other, self.pos),
                     };
-                    let modname = match self.pop()? {
+                    let modname = match self.pop_resolve()? {
                         Value::String(string) => string.into_bytes(),
                         other => return Self::stack_error("string", &other, self.pos),
                     };
@@ -361,6 +370,47 @@ impl<R: Read> Deserializer<R> {
                     };
                     let global = self.pop_resolve()?;
                     self.reduce_global(global, argtuple)?;
+                }
+
+                // Arbitrary classes - make a best effort attempt to recover some data
+                INST => {
+                    // pop module name and class name
+                    for _ in 0..2 {
+                        self.read_line()?;
+                    }
+                    // pop arguments to init
+                    self.pop_mark()?;
+                    // push empty dictionary instead of the class instance
+                    self.stack.push(Value::Dict(Vec::new()));
+                }
+                OBJ => {
+                    // pop arguments to init
+                    self.pop_mark()?;
+                    // pop class object
+                    self.pop()?;
+                    self.stack.push(Value::Dict(Vec::new()));
+                }
+                NEWOBJ => {
+                    // pop arguments and class object
+                    for _ in 0..2 {
+                        self.pop()?;
+                    }
+                    self.stack.push(Value::Dict(Vec::new()));
+                }
+                NEWOBJ_EX => {
+                    // pop keyword args, arguments and class object
+                    for _ in 0..3 {
+                        self.pop()?;
+                    }
+                    self.stack.push(Value::Dict(Vec::new()));
+                }
+                BUILD => {
+                    // The top-of-stack for BUILD is used either as the instance __dict__,
+                    // or an argument for __setstate__, in which case it can be *any* type
+                    // of object.  In both cases, we just replace the standin.
+                    let state = self.pop()?;
+                    self.pop()?;  // remove the object standin
+                    self.stack.push(state);
                 }
 
                 // Unsupported (mostly class instance building) opcodes
@@ -734,7 +784,7 @@ impl<R: Read> Deserializer<R> {
                 Value::Global(Global::Set),
             (b"__builtin__", b"frozenset") | (b"builtins", b"frozenset") =>
                 Value::Global(Global::Frozenset),
-            _ => return self.error(ErrorCode::UnsupportedGlobal(modname, globname)),
+            _ => Value::Global(Global::Other),
         };
         Ok(value)
     }
@@ -772,6 +822,13 @@ impl<R: Read> Deserializer<R> {
                     _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
                 }
             }
+            Value::Global(Global::Other) => {
+                // Anything else; just keep it on the stack as an opaque object.
+                // If it is a class object, it will get replaced later when the
+                // class is instantiated.
+                self.stack.push(Value::Global(Global::Other));
+                Ok(())
+            }
             other => Self::stack_error("global reference", &other, self.pos),
         }
     }
@@ -785,7 +842,7 @@ impl<R: Read> Deserializer<R> {
         Err(Error::Eval(reason, self.pos))
     }
 
-    fn deserialize_value(&mut self, value: Value) -> Result<value::Value> {
+    fn convert_value(&mut self, value: Value) -> Result<value::Value> {
         match value {
             Value::None => Ok(value::Value::None),
             Value::Bool(v) => Ok(value::Value::Bool(v)),
@@ -801,23 +858,23 @@ impl<R: Read> Deserializer<R> {
             Value::Bytes(v) => Ok(value::Value::Bytes(v)),
             Value::String(v) => Ok(value::Value::String(v)),
             Value::List(v) => {
-                let new = v.into_iter().map(|v| self.deserialize_value(v))
+                let new = v.into_iter().map(|v| self.convert_value(v))
                                        .collect::<Result<_>>();
                 Ok(value::Value::List(new?))
             },
             Value::Tuple(v) => {
-                let new = v.into_iter().map(|v| self.deserialize_value(v))
+                let new = v.into_iter().map(|v| self.convert_value(v))
                                        .collect::<Result<_>>();
                 Ok(value::Value::Tuple(new?))
             },
             Value::Set(v) => {
-                let new = v.into_iter().map(|v| self.deserialize_value(v)
+                let new = v.into_iter().map(|v| self.convert_value(v)
                                             .and_then(|rv| rv.into_hashable()))
                                        .collect::<Result<_>>();
                 Ok(value::Value::Set(new?))
             },
             Value::FrozenSet(v) => {
-                let new = v.into_iter().map(|v| self.deserialize_value(v)
+                let new = v.into_iter().map(|v| self.convert_value(v)
                                             .and_then(|rv| rv.into_hashable()))
                                        .collect::<Result<_>>();
                 Ok(value::Value::FrozenSet(new?))
@@ -825,14 +882,14 @@ impl<R: Read> Deserializer<R> {
             Value::Dict(v) => {
                 let mut map = BTreeMap::new();
                 for (key, value) in v {
-                    let real_key = self.deserialize_value(key).and_then(|rv| rv.into_hashable())?;
-                    let real_value = self.deserialize_value(value)?;
+                    let real_key = self.convert_value(key).and_then(|rv| rv.into_hashable())?;
+                    let real_value = self.convert_value(value)?;
                     map.insert(real_key, real_value);
                 }
                 Ok(value::Value::Dict(map))
             },
             Value::MemoRef(memo_id) => {
-                self.resolve_recursive(memo_id, (), |slf, (), value| slf.deserialize_value(value))
+                self.resolve_recursive(memo_id, (), |slf, (), value| slf.convert_value(value))
             },
             Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
         }
@@ -1059,8 +1116,7 @@ pub fn from_iter<'de, E: IterReadItem, I: Iterator<Item=E>, T: de::Deserialize<'
 /// Decodes a value from a `std::io::Read`.
 pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
     let mut de = Deserializer::new(rdr, false);
-    let intermediate_value = de.parse_value()?;
-    let value = de.deserialize_value(intermediate_value)?;
+    let value = de.deserialize_value()?;
     de.end()?;
     Ok(value)
 }

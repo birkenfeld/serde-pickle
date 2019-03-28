@@ -16,6 +16,10 @@ except ImportError:
 
 longish = 10000000000 * 10000000000  # > 64 bits
 
+class Class(object):
+    def __init__(self):
+        self.attr = 5
+
 # A test object that generates all the types supported, with HashableValue
 # and normal Value variants.
 test_object = {
@@ -32,7 +36,8 @@ test_object = {
         [1, 2, 3],
         set([42, 0]),
         {}
-    ]
+    ],
+    7: Class()
 }
 
 # Generate test file depending on protocol and Python major version.

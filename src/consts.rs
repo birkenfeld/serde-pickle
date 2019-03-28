@@ -64,15 +64,15 @@ pub const ADDITEMS         : u8 = b'\x90'; // modify set by adding topmost stack
 pub const FROZENSET        : u8 = b'\x91'; // build frozenset from topmost stack items
 pub const MEMOIZE          : u8 = b'\x94'; // store top of the stack in memo
 pub const FRAME            : u8 = b'\x95'; // indicate the beginning of a new frame
+pub const INST             : u8 = b'i';    // build & push class instance
+pub const OBJ              : u8 = b'o';    // build & push class instance
+pub const BUILD            : u8 = b'b';    // call __setstate__ or __dict__.update()
+pub const NEWOBJ           : u8 = b'\x81'; // build object by applying cls.__new__ to argtuple
+pub const NEWOBJ_EX        : u8 = b'\x92'; // like NEWOBJ but work with keyword only arguments
 
-// Ops only used for classes and recursive objects; these are unsupported.
+// Ops only used for recursive objects; these are unsupported.
 // pub const PERSID           : u8 = b'P';    // push persistent object; id is taken from string arg
 // pub const BINPERSID        : u8 = b'Q';    //  "       "         "  ;  "  "   "     "  stack
-// pub const BUILD            : u8 = b'b';    // call __setstate__ or __dict__.update()
-// pub const INST             : u8 = b'i';    // build & push class instance
-// pub const OBJ              : u8 = b'o';    // build & push class instance
-// pub const NEWOBJ           : u8 = b'\x81'; // build object by applying cls.__new__ to argtuple
 // pub const EXT1             : u8 = b'\x82'; // push object from extension registry; 1-byte index
 // pub const EXT2             : u8 = b'\x83'; // ditto, but 2-byte index
 // pub const EXT4             : u8 = b'\x84'; // ditto, but 4-byte index
-// pub const NEWOBJ_EX        : u8 = b'\x92'; // like NEWOBJ but work with keyword only arguments

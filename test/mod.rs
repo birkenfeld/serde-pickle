@@ -214,10 +214,10 @@ mod value_tests {
         (3, 0), (3, 1), (3, 2), (3, 3), (3, 4)
     ];
 
-    fn get_test_object() -> Value {
+    fn get_test_object(pyver: u32) -> Value {
         // Reproduces the test_object from test/data/generate.py.
         let longish = BigInt::from(10000000000u64) * BigInt::from(10000000000u64);
-        pyobj!(d={
+        let mut obj = pyobj!(d={
             n=None           => n=None,
             b=False          => t=(b=False, b=True),
             i=10             => i=100000,
@@ -232,15 +232,25 @@ mod value_tests {
                 ss=(i=0, i=42),
                 d={}
             ]
-        })
+        });
+        // Unfortunately, __dict__ keys are strings and so are pickled
+        // differently depending on major version.
+        match &mut obj {
+            Value::Dict(map) => if pyver == 2 {
+                map.insert(hpyobj!(i=7), pyobj!(d={bb=b"attr" => i=5}));
+            } else {
+                map.insert(hpyobj!(i=7), pyobj!(d={s="attr" => i=5}));
+            },
+            _ => unreachable!()
+        }
+        obj
     }
 
     #[test]
     fn unpickle_all() {
-        let comparison = get_test_object();
-
         for &(major, proto) in TEST_CASES {
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
+            let comparison = get_test_object(major);
             let unpickled = value_from_reader(file).unwrap();
             assert_eq!(unpickled, comparison);
         }
@@ -248,7 +258,7 @@ mod value_tests {
 
     #[test]
     fn roundtrip() {
-        let dict = get_test_object();
+        let dict = get_test_object(2);
         let vec: Vec<_> = value_to_vec(&dict, true).unwrap();
         let tripped = value_from_slice(&vec).unwrap();
         assert_eq!(dict, tripped);
