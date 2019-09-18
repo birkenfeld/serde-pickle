@@ -80,7 +80,7 @@ impl Arbitrary for Value {
         gen_value(g, MAX_DEPTH)
     }
 
-    fn shrink(&self) -> Box<Iterator<Item=Value>> {
+    fn shrink(&self) -> Box<dyn Iterator<Item=Value>> {
         match *self {
             Value::None => empty_shrinker(),
             Value::Bool(v) => Box::new(Arbitrary::shrink(&v).map(Value::Bool)),
@@ -103,7 +103,7 @@ impl Arbitrary for HashableValue {
         gen_hvalue(g, MAX_DEPTH)
     }
 
-    fn shrink(&self) -> Box<Iterator<Item=HashableValue>> {
+    fn shrink(&self) -> Box<dyn Iterator<Item=HashableValue>> {
         match *self {
             HashableValue::None => empty_shrinker(),
             HashableValue::Bool(v) => Box::new(Arbitrary::shrink(&v).map(HashableValue::Bool)),
