@@ -1,0 +1,25 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          - 1.31.0
+          - stable
+          - nightly
+    steps:
+      - name: Checkout the source code
+        uses: actions/checkout@master
+      - name: Install Rust
+        run: |
+          rustup toolchain update --no-self-update ${{ matrix.toolchain }}
+          rustup default ${{ matrix.toolchain }}
+      - name: Build
+        run: cargo build --all
+      - name: Test
+        run: cargo test --all
