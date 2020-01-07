@@ -22,6 +22,11 @@ serde = "*"
 serde-pickle = "*"
 ```
 
+Requirements
+============
+
+Minimum supported Rust version is 1.31.0.
+
 Usage
 =====
 
