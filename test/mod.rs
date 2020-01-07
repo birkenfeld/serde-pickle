@@ -316,7 +316,7 @@ mod value_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "unstable")]
 mod benches {
     extern crate test;
 
