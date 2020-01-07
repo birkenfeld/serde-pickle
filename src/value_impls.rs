@@ -12,12 +12,12 @@ use std::result::Result as StdResult;
 use std::collections::{btree_map, BTreeMap};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use serde::{ser, de};
+use serde::{ser, de, forward_to_deserialize_any};
 use serde::ser::Serialize;
 use serde::de::Visitor;
 
-use value::{Value, HashableValue};
-use error::{Error, ErrorCode, Result};
+use crate::value::{Value, HashableValue};
+use crate::error::{Error, ErrorCode, Result};
 
 impl<'de> de::Deserialize<'de> for Value {
     #[inline]

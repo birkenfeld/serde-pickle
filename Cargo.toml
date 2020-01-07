@@ -7,6 +7,7 @@ description = "A serde-based serialization library for Python's pickle format"
 repository = "https://github.com/birkenfeld/serde-pickle"
 documentation = "http://docs.rs/serde-pickle"
 keywords = ["pickle", "python", "serde", "serialization"]
+edition = "2018"
 
 [dependencies]
 serde = "1.0.2"

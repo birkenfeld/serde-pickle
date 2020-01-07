@@ -4,10 +4,6 @@
 // your option. This file may not be copied, modified, or distributed except
 // according to those terms.
 
-extern crate rand;
-extern crate quickcheck;
-extern crate serde_json;
-
 mod arby;
 
 macro_rules! pyobj {
@@ -46,8 +42,11 @@ mod struct_tests {
     use std::iter::FromIterator;
     use std::collections::BTreeMap;
     use serde::{ser, de};
-    use {to_vec, value_to_vec, from_slice, value_from_slice, to_value, from_value,
-         Value, HashableValue};
+    use serde_derive::{Serialize, Deserialize};
+    use crate::{
+        to_vec, value_to_vec, from_slice, value_from_slice, to_value, from_value,
+        Value, HashableValue
+    };
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Inner {
@@ -201,12 +200,12 @@ mod value_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter::FromIterator;
     use num_bigint::BigInt;
-    use super::rand::{RngCore, thread_rng};
-    use super::quickcheck::{QuickCheck, StdGen};
-    use super::serde_json;
-    use {value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
-    use {Value, HashableValue};
-    use error::{Error, ErrorCode};
+    use rand::{RngCore, thread_rng};
+    use quickcheck::{QuickCheck, StdGen};
+    use serde_json;
+    use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
+    use crate::{Value, HashableValue};
+    use crate::error::{Error, ErrorCode};
 
     // combinations of (python major, pickle proto) to test
     const TEST_CASES: &'static [(u32, u32)] = &[
@@ -324,7 +323,7 @@ mod benches {
     use std::collections::BTreeMap;
     use byteorder::{LittleEndian, WriteBytesExt};
     use self::test::Bencher;
-    use {Value, HashableValue, value_from_slice, value_to_vec};
+    use crate::{Value, HashableValue, value_from_slice, value_to_vec};
 
     #[bench]
     fn unpickle_list(b: &mut Bencher) {

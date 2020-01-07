@@ -52,16 +52,6 @@
 
 #![cfg_attr(test, feature(test))]
 
-#[macro_use]
-extern crate serde;
-extern crate num_bigint;
-extern crate num_traits;
-extern crate byteorder;
-extern crate iter_read;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_derive;
-
 pub use self::ser::{
     Serializer,
     to_writer,

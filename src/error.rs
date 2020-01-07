@@ -104,6 +104,7 @@ impl fmt::Display for Error {
 }
 
 impl error::Error for Error {
+    #[allow(deprecated)]  // keep this for older Rust versions
     fn description(&self) -> &str {
         match *self {
             Error::Io(ref error) => error::Error::description(error),

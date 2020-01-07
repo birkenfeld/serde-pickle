@@ -31,9 +31,6 @@ toplevel functions for simple en/decoding of supported objects.
 Example:
 
 ```rust
-extern crate serde;
-extern crate serde_pickle;
-
 use std::collections::BTreeMap;
 
 fn main() {

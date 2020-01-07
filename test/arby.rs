@@ -4,13 +4,13 @@
 // your option. This file may not be copied, modified, or distributed except
 // according to those terms.
 
-//! QuicckCheck Arbitrary instance for Value, and associated helpers.
+//! QuickCheck Arbitrary instance for Value, and associated helpers.
 
 use std::i64;
 use num_bigint::BigInt;
-use super::rand::Rng;
-use super::quickcheck::{Arbitrary, Gen, empty_shrinker};
-use {Value, HashableValue};
+use rand::Rng;
+use quickcheck::{Arbitrary, Gen, empty_shrinker};
+use crate::{Value, HashableValue};
 
 const MAX_DEPTH: u32 = 1;
 

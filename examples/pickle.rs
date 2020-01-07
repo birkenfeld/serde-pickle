@@ -7,9 +7,6 @@
 //! A simple example executable that manipulates pickle streams to demonstrate
 //! the library's features.
 
-extern crate serde_pickle;
-extern crate serde_json;
-
 use std::env;
 use std::error::Error;
 use std::fs::File;

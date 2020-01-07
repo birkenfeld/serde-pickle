@@ -18,7 +18,7 @@ use std::vec;
 use std::io::{BufReader, BufRead, Read};
 use std::str::FromStr;
 use std::collections::BTreeMap;
-use serde::de;
+use serde::{de, forward_to_deserialize_any};
 use serde::de::Visitor;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;

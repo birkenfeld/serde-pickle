@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
 
-pub use value_impls::{to_value, from_value};
+pub use crate::value_impls::{to_value, from_value};
 
-use error::{Error, ErrorCode};
+use crate::error::{Error, ErrorCode};
 
 /// Represents all primitive builtin Python values that can be restored by
 /// unpickling.
