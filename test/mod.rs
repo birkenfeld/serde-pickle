@@ -205,6 +205,7 @@ mod value_tests {
     use serde_json;
     use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
     use crate::{Value, HashableValue};
+    use crate::Deserializer;
     use crate::error::{Error, ErrorCode};
 
     // combinations of (python major, pickle proto) to test
@@ -313,6 +314,17 @@ mod value_tests {
         let vec: Vec<_> = to_vec(&original, true).unwrap();
         let tripped: serde_json::Value = from_slice(&vec).unwrap();
         assert_eq!(original, tripped);
+    }
+
+    #[test]
+    fn bytestring_v2_py3_roundtrip() {
+        let original = Value::Bytes(b"123\xff\xfe".to_vec());
+        let vec: Vec<_> = value_to_vec(&original, false).unwrap();
+        // Python 3 default deserializer attempts to decode strings
+        let mut de = Deserializer::new(vec.as_slice(), true);
+        let tripped: Value = de.deserialize_value().unwrap();
+        assert_eq!(original, tripped);
+        de.end().unwrap();
     }
 }
 

@@ -462,16 +462,36 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_bytes(self, value: &[u8]) -> Result<()> {
-        if value.len() < 256 {
-            let op = if self.use_proto_3 { SHORT_BINBYTES } else { SHORT_BINSTRING };
-            self.write_opcode(op)?;
-            self.writer.write_u8(value.len() as u8)?;
+        if self.use_proto_3 {
+            if value.len() < 256 {
+                self.write_opcode(SHORT_BINBYTES)?;
+                self.writer.write_u8(value.len() as u8)?;
+            } else {
+                self.write_opcode(BINBYTES)?;
+                self.writer.write_u32::<LittleEndian>(value.len() as u32)?;
+            }
+            self.writer.write_all(value).map_err(From::from)
         } else {
-            let op = if self.use_proto_3 { BINBYTES } else { BINSTRING };
-            self.write_opcode(op)?;
-            self.writer.write_u32::<LittleEndian>(value.len() as u32)?;
+            // We can't use the BINSTRING opcodes because they depend on the
+            // str encoding in Unpickler, which varies between Py2 and Py3.
+            // Instead, pickle the bytes as unicode codepoints and then encode
+            // them as latin1 on unpickling to get the bytes (Python itself
+            // does this trick)
+            // TODO: we could keep track of 'codecs\nencode' and 'latin1' in
+            // the memo rather than writing them out for each byte string
+            self.write_opcode(GLOBAL)?;
+            self.writer.write_all(b"_codecs\nencode\n")?;
+            // BINUNICODE needs a utf8-encoded string, but we're pretending ours
+            // has a latin1 encoding. Happily, the byte values of an encoded latin1
+            // string match their codepoints. So converting to utf8 encoding is
+            // as simple as interpreting each byte as a unicode codepoint and
+            // then encoding as utf8 - https://stackoverflow.com/a/28175593/2352259
+            let utf8_value: String = value.iter().map(|&c| c as char).collect();
+            self.serialize_str(&utf8_value)?;
+            self.serialize_str("latin1")?;
+            self.write_opcode(TUPLE2)?;
+            self.write_opcode(REDUCE).map_err(From::from)
         }
-        self.writer.write_all(value).map_err(From::from)
     }
 
     #[inline]
