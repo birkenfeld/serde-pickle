@@ -18,6 +18,7 @@ use std::vec;
 use std::io::{BufReader, BufRead, Read};
 use std::str::FromStr;
 use std::collections::BTreeMap;
+use std::iter::FusedIterator;
 use serde::{de, forward_to_deserialize_any};
 use serde::de::Visitor;
 use num_bigint::{BigInt, Sign};
@@ -1136,7 +1137,7 @@ pub fn from_slice<'de, T: de::Deserialize<'de>>(v: &[u8]) -> Result<T> {
 }
 
 /// Decodes a value from any iterator supported as a reader.
-pub fn from_iter<'de, E: IterReadItem, I: Iterator<Item=E>, T: de::Deserialize<'de>>(it: I) -> Result<T> {
+pub fn from_iter<'de, E: IterReadItem, I: FusedIterator<Item=E>, T: de::Deserialize<'de>>(it: I) -> Result<T> {
     from_reader(IterRead::new(it))
 }
 
@@ -1154,6 +1155,6 @@ pub fn value_from_slice(v: &[u8]) -> Result<value::Value> {
 }
 
 /// Decodes a value from any iterator supported as a reader.
-pub fn value_from_iter<E: IterReadItem, I: Iterator<Item=E>>(it: I) -> Result<value::Value> {
+pub fn value_from_iter<E: IterReadItem, I: FusedIterator<Item=E>>(it: I) -> Result<value::Value> {
     value_from_reader(IterRead::new(it))
 }
