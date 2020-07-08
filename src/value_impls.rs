@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -319,7 +319,25 @@ impl<'de: 'a, 'a> de::EnumAccess<'de> for &'a mut Deserializer {
                     Ok((res, self))
                 }
             }
-            _ => Err(Error::Syntax(ErrorCode::Structure("enums must be tuples".into())))
+            Some(Value::Dict(v)) => {
+                if v.len() != 1 {
+                    Err(Error::Syntax(ErrorCode::Structure("enum variants must \
+                                                            have one dict entry".into())))
+                } else {
+                    let (name, args) = v.into_iter().next().unwrap();
+                    self.value = Some(name.into_value());
+                    let val = seed.deserialize(&mut *self)?;
+                    self.value = Some(args);
+                    Ok((val, self))
+                }
+            }
+            s @ Some(Value::String(_)) => {
+                self.value = s;
+                let val = seed.deserialize(&mut *self)?;
+                Ok((val, self))
+            }
+            _ => Err(Error::Syntax(ErrorCode::Structure("enums must be represented as \
+                                                         dicts or tuples".into())))
         }
     }
 }

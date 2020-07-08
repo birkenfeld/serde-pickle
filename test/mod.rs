@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -181,6 +181,7 @@ mod struct_tests {
 
     #[test]
     fn decode_enum() {
+        // tuple representation
         test_decode_ok(pyobj!(t=(s="Dog")),
                        Animal::Dog);
         test_decode_ok(pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])),
@@ -191,6 +192,19 @@ mod struct_tests {
                        Animal::Cat { age: 5, name: "Molyneux".into() });
         test_decode_ok(pyobj!(l=[t=(s="Dog"), t=(s="Dog"),
                                  t=(s="Cat", d={s="age" => i=5, s="name" => s="?"})]),
+                       vec![Animal::Dog, Animal::Dog, Animal::Cat { age: 5, name: "?".into() }]);
+
+        // string/dict representation
+        test_decode_ok(pyobj!(s="Dog"),
+                       Animal::Dog);
+        test_decode_ok(pyobj!(d={s="AntHive" => l=[s="ant", s="aunt"]}),
+                       Animal::AntHive(vec!["ant".into(), "aunt".into()]));
+        test_decode_ok(pyobj!(d={s="Frog" => l=[s="Henry", l=[i=1, i=5]]}),
+                       Animal::Frog("Henry".into(), vec![1, 5]));
+        test_decode_ok(pyobj!(d={s="Cat" => d={s="age" => i=5, s="name" => s="Molyneux"}}),
+                       Animal::Cat { age: 5, name: "Molyneux".into() });
+        test_decode_ok(pyobj!(l=[s="Dog", s="Dog",
+                                 d={s="Cat" => d={s="age" => i=5, s="name" => s="?"}}]),
                        vec![Animal::Dog, Animal::Dog, Animal::Cat { age: 5, name: "?".into() }]);
     }
 }

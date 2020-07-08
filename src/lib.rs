@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -35,6 +35,11 @@
 //! When deserializing, arbitrary Python objects saved using a pickled instance
 //! dictionary or `__setstate__` are replaced by that state, since version
 //! 0.5 of this library.
+//!
+//! *Note:* Enum variants are serialized as Python tuples `(name, [data])`
+//! instead of mappings (or a plain string for unit variants), which is the
+//! representation selected by e.g. `serde_json`.  On deserialization, both
+//! the tuple form and the string/mapping form is accepted.
 //!
 //! *Note:* since Serde 1.0, fixed-size Rust arrays (which have type `[T; n]` or
 //! `&[T; n]`) are treated as tuples when serializing.  In particular, this
