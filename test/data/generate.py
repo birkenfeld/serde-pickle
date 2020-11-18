@@ -35,7 +35,8 @@ test_object = {
     (): [
         [1, 2, 3],
         set([42, 0]),
-        {}
+        {},
+        bytearray(b"\x00\x55\xaa\xff"),
     ],
     7: Class()
 }

@@ -244,7 +244,8 @@ mod value_tests {
             t=()             => l=[
                 l=[i=1, i=2, i=3],
                 ss=(i=0, i=42),
-                d={}
+                d={},
+                bb=b"\x00\x55\xaa\xff"
             ]
         });
         // Unfortunately, __dict__ keys are strings and so are pickled
@@ -266,7 +267,7 @@ mod value_tests {
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
             let comparison = get_test_object(major);
             let unpickled = value_from_reader(file).unwrap();
-            assert_eq!(unpickled, comparison);
+            assert_eq!(unpickled, comparison, "py {}, proto {}", major, proto);
         }
     }
 

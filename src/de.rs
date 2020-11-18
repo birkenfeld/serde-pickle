@@ -36,6 +36,7 @@ type MemoId = u32;
 enum Global {
     Set,         // builtins/__builtin__.set
     Frozenset,   // builtins/__builtin__.frozenset
+    Bytearray,   // builtins/__builtin__.bytearray
     Encode,      // _codecs.encode
     Other,       // anything else (may be a classobj that is later discarded)
 }
@@ -788,6 +789,8 @@ impl<R: Read> Deserializer<R> {
                 Value::Global(Global::Set),
             (b"__builtin__", b"frozenset") | (b"builtins", b"frozenset") =>
                 Value::Global(Global::Frozenset),
+            (b"__builtin__", b"bytearray") | (b"builtins", b"bytearray") =>
+                Value::Global(Global::Bytearray),
             _ => Value::Global(Global::Other),
         };
         Ok(value)
@@ -811,7 +814,25 @@ impl<R: Read> Deserializer<R> {
                         self.stack.push(Value::FrozenSet(items));
                         Ok(())
                     }
-                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
+                    _ => self.error(ErrorCode::InvalidValue("frozenset() arg".into())),
+                }
+            }
+            Value::Global(Global::Bytearray) => {
+                // On Py2, the call is encoded as bytearray(u"foo", "latin-1").
+                argtuple.truncate(1);
+                match self.resolve(argtuple.pop()) {
+                    Some(Value::Bytes(bytes)) => {
+                        self.stack.push(Value::Bytes(bytes));
+                        Ok(())
+                    }
+                    Some(Value::String(string)) => {
+                        // The code points in the string are actually bytes values.
+                        // So we need to collect them individually.
+                        self.stack.push(Value::Bytes(
+                            string.chars().map(|ch| ch as u32 as u8).collect()));
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("bytearray() arg".into())),
                 }
             }
             Value::Global(Global::Encode) => {
