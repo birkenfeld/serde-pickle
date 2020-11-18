@@ -25,7 +25,7 @@ serde-pickle = "0.6"
 Requirements
 ============
 
-Minimum supported Rust version is 1.31.0.
+Minimum supported Rust version is 1.34.2.
 
 Usage
 =====
