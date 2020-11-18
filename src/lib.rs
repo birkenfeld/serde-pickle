@@ -58,6 +58,10 @@
 //! types (notably, long integers and sets, which serde's generic types don't
 //! handle).  These functions, called `value_from_*` and `value_to_*`, will
 //! correctly (un)pickle these types.
+//!
+//! # Minimum Supported Rust Version
+//!
+//! The minimum supported version of the toolchain is 1.34.2.
 
 #![cfg_attr(feature = "unstable", feature(test))]
 
