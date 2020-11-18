@@ -26,7 +26,7 @@
 //! * Boolean (Rust `bool`)
 //! * Integers (Rust `i64` or bigints from num)
 //! * Floats (Rust `f64`)
-//! * Bytes objects and bytearrays (Rust `Vec<u8>`)
+//! * Bytes objects and bytearrays (see below)
 //! * (Unicode) strings (Rust `String`)
 //! * Lists and tuples (Rust `Vec<Value>`)
 //! * Sets and frozensets (Rust `HashSet<Value>`)
@@ -36,15 +36,19 @@
 //! dictionary or `__setstate__` are replaced by that state, since version
 //! 0.5 of this library.
 //!
-//! *Note:* Enum variants are serialized as Python tuples `(name, [data])`
-//! instead of mappings (or a plain string for unit variants), which is the
-//! representation selected by e.g. `serde_json`.  On deserialization, both
+//! *Note on enums:* Enum variants are serialized as Python tuples `(name,
+//! [data])` instead of mappings (or a plain string for unit variants), which is
+//! the representation selected by e.g. `serde_json`.  On deserialization, both
 //! the tuple form and the string/mapping form is accepted.
 //!
-//! *Note:* since Serde 1.0, fixed-size Rust arrays (which have type `[T; n]` or
-//! `&[T; n]`) are treated as tuples when serializing.  In particular, this
-//! means that bytes literals will also be serialized as a tuple of integers
-//! unless you convert them into an unsized slice first (e.g. `&b"bytes"[..]`).
+//! *Note on bytes objects:* when deserializing bytes objects, you have to use a
+//! Rust wrapper type that enables deserialization from the serde data model's
+//! "bytes" type.  The [`serde_bytes`](https://docs.serde.rs/serde_bytes/) crate
+//! provides such wrappers.
+//!
+//! Likewise, `Vec<u8>`, `[u8; N]` and `&[u8]` are treated as sequences when
+//! serializing.  This means that they will be serialized as a tuple or list of
+//! integers unless you use one of the wrappers in `serde_bytes`.
 //!
 //! # Exported API
 //!
