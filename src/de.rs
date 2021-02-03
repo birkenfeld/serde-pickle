@@ -504,7 +504,7 @@ impl<R: Read> Deserializer<R> {
 
     // Resolve memo reference during Value deserializing.
     fn resolve_recursive<T, U, F>(&mut self, id: MemoId, u: U, f: F) -> Result<T>
-        where F: Fn(&mut Self, U, Value) -> Result<T>
+        where F: FnOnce(&mut Self, U, Value) -> Result<T>
     {
         // Take the value from the memo while visiting it.  This prevents us
         // from trying to depickle recursive structures, which we can't do
@@ -1052,6 +1052,14 @@ impl<'de: 'a, 'a, R: Read + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
                     self.de.value = Some(args);
                     Ok((val, self))
                 }
+            }
+            Value::MemoRef(memo_id) => {
+                self.de.resolve_recursive(memo_id, (), |slf, (), value| {
+                    slf.value = Some(value);
+                    Ok(())
+                })?;
+                // retry with memo resolved
+                self.variant_seed(seed)
             }
             s @ Value::String(_) => {
                 self.de.value = Some(s);
