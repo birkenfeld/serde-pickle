@@ -37,6 +37,7 @@ enum Global {
     Set,         // builtins/__builtin__.set
     Frozenset,   // builtins/__builtin__.frozenset
     Bytearray,   // builtins/__builtin__.bytearray
+    List,        // builtins/__builtin__.list
     Encode,      // _codecs.encode
     Other,       // anything else (may be a classobj that is later discarded)
 }
@@ -789,6 +790,8 @@ impl<R: Read> Deserializer<R> {
                 Value::Global(Global::Set),
             (b"__builtin__", b"frozenset") | (b"builtins", b"frozenset") =>
                 Value::Global(Global::Frozenset),
+            (b"__builtin__", b"list") | (b"builtins", b"list") =>
+                Value::Global(Global::List),
             (b"__builtin__", b"bytearray") | (b"builtins", b"bytearray") =>
                 Value::Global(Global::Bytearray),
             _ => Value::Global(Global::Other),
@@ -833,6 +836,15 @@ impl<R: Read> Deserializer<R> {
                         Ok(())
                     }
                     _ => self.error(ErrorCode::InvalidValue("bytearray() arg".into())),
+                }
+            }
+            Value::Global(Global::List) => {
+                match self.resolve(argtuple.pop()) {
+                    Some(Value::List(items)) => {
+                        self.stack.push(Value::List(items));
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
                 }
             }
             Value::Global(Global::Encode) => {
