@@ -844,7 +844,7 @@ impl<R: Read> Deserializer<R> {
                         self.stack.push(Value::List(items));
                         Ok(())
                     }
-                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
+                    _ => self.error(ErrorCode::InvalidValue("list() arg".into())),
                 }
             }
             Value::Global(Global::Encode) => {
