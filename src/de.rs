@@ -116,6 +116,10 @@ impl<R: Read> Deserializer<R> {
     /// Parse a value from the underlying stream.  This will consume the whole
     /// pickle until the STOP opcode.
     fn parse_value(&mut self) -> Result<Value> {
+        // Clear memo, to allow reading multiple pickle dump calls to
+        // a single stream.
+        self.memo.clear();
+
         loop {
             match self.read_byte()? {
                 // Specials
