@@ -64,6 +64,49 @@
 //! handle).  These functions, called `value_from_*` and `value_to_*`, will
 //! correctly (un)pickle these types.
 //!
+//! By default `(value_)from_reader` closes the input stream. It is possible
+//! to deserialize multiple pickle objects from a single stream by
+//! implementing a custom reader.
+//!
+//! ```
+//! use std::io::Read;
+//! use serde_pickle::{Deserializer, Result};
+//! use serde::Deserialize;
+//!
+//! struct PickleReader<R>
+//! where
+//!     R: Read + Sized,
+//! {
+//!     de: Deserializer<R>,
+//! }
+//!
+//! impl<R: Read + Sized> PickleReader<R>
+//! {
+//!    fn new(reader: R) -> PickleReader<R> {
+//!        PickleReader {
+//!            de: Deserializer::new(reader, false),
+//!        }
+//!    }
+//!
+//!    pub fn read_object<'de, T: Deserialize<'de>>(&mut self) -> Result<T> {
+//!        let value = Deserialize::deserialize(&mut self.de)?;
+//!        Ok(value)
+//!    }
+//! }
+//!
+//! let input = [0x80, 0x04, 0x95, 0x09, 0x00, 0x00, 0x00, 0x00,
+//!              0x00, 0x00, 0x00, 0x8c, 0x05, 0x48, 0x65, 0x6c,
+//!              0x6c, 0x6f, 0x94, 0x2e, 0x80, 0x04, 0x95, 0x0a,
+//!              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c,
+//!              0x06, 0x70, 0x69, 0x63, 0x6b, 0x6c, 0x65, 0x94,
+//!              0x2e, 0x00];
+//! let mut reader = PickleReader::new(std::io::Cursor::new(input));
+//! let string1: String = reader.read_object().unwrap();
+//! let string2: String = reader.read_object().unwrap();
+//! assert_eq!(&string1, "Hello");
+//! assert_eq!(&string2, "pickle");
+//! ```
+//!
 //! # Minimum Supported Rust Version
 //!
 //! The minimum supported version of the toolchain is 1.41.1.
