@@ -69,6 +69,11 @@ pub const OBJ              : u8 = b'o';    // build & push class instance
 pub const BUILD            : u8 = b'b';    // call __setstate__ or __dict__.update()
 pub const NEWOBJ           : u8 = b'\x81'; // build object by applying cls.__new__ to argtuple
 pub const NEWOBJ_EX        : u8 = b'\x92'; // like NEWOBJ but work with keyword only arguments
+pub const BYTEARRAY8       : u8 = b'\x96'; // push bytearray
+
+// Ops used for out-of-band buffers; these are unsupported.
+// pub const NEXT_BUFFER      : u8 = b'\x97'; // push next out-of-band buffer
+// pub const READONLY_BUFFER  : u8 = b'\x98'; // make top of stack readonly
 
 // Ops only used for recursive objects; these are unsupported.
 // pub const PERSID           : u8 = b'P';    // push persistent object; id is taken from string arg

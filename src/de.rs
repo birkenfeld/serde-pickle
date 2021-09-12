@@ -306,6 +306,10 @@ impl<R: Read> Deserializer<R> {
                     let decoded = self.decode_unicode(string)?;
                     self.stack.push(decoded);
                 }
+                BYTEARRAY8 => {
+                    let string = self.read_u64_prefixed_bytes()?;
+                    self.stack.push(Value::Bytes(string));
+                }
 
                 // Tuples
                 EMPTY_TUPLE => self.stack.push(Value::Tuple(Vec::new())),
@@ -443,7 +447,7 @@ impl<R: Read> Deserializer<R> {
                     self.stack.push(state);
                 }
 
-                // Unsupported (mostly class instance building) opcodes
+                // Unsupported opcodes
                 code => return self.error(ErrorCode::Unsupported(code as char))
             }
         }

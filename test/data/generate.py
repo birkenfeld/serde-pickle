@@ -47,7 +47,7 @@ test_object = {
 
 # Generate test file depending on protocol and Python major version.
 major = sys.version_info[0]
-max_proto = {2: 2, 3: 4}[major]
+max_proto = {2: 2, 3: 5}[major]
 for proto in range(max_proto + 1):
     with open('tests_py%d_proto%d.pickle' % (major, proto), 'wb') as fp:
         pickle.dump(test_object, fp, proto)

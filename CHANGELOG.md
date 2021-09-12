@@ -2,6 +2,7 @@
 
 ## 1.0 - Sept 2021
 
+- Require Rust 1.41.
 - Add `DeOptions` and `SerOptions` struct for selecting options when
   deserializing and serializing.  `SerOptions` replaces the `use_proto_3`
   boolean flag for serializer functions.

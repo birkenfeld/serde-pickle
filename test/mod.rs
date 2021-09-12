@@ -223,9 +223,9 @@ mod value_tests {
     use crate::error::{Error, ErrorCode};
 
     // combinations of (python major, pickle proto) to test
-    const TEST_CASES: &'static [(u32, u32)] = &[
+    const TEST_CASES: &[(u32, u32)] = &[
         (2, 0), (2, 1), (2, 2),
-        (3, 0), (3, 1), (3, 2), (3, 3), (3, 4)
+        (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5),
     ];
 
     fn get_test_object(pyver: u32) -> Value {
@@ -281,7 +281,7 @@ mod value_tests {
 
     #[test]
     fn recursive() {
-        for proto in &[0, 1, 2, 3, 4] {
+        for proto in &[0, 1, 2, 3, 4, 5] {
             let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
             match value_from_reader(file, Default::default()) {
                 Err(Error::Syntax(ErrorCode::Recursive)) => { }

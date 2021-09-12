@@ -11,7 +11,7 @@
 //! Please see the [Python docs](http://docs.python.org/library/pickle) for
 //! details on the Pickle format.
 //!
-//! This crate supports all Pickle protocols (0 to 4) when reading, and writing
+//! This crate supports all Pickle protocols (0 to 5) when reading, and writing
 //! protocol 2 (compatible with Python 2 and 3), or protocol 3 (compatible with
 //! Python 3 only).
 //!
@@ -49,6 +49,11 @@
 //! Likewise, `Vec<u8>`, `[u8; N]` and `&[u8]` are treated as sequences when
 //! serializing.  This means that they will be serialized as a tuple or list of
 //! integers unless you use one of the wrappers in `serde_bytes`.
+//!
+//! # Unsupported features
+//!
+//! - Recursive objects using the `PERSID` and `EXT` type opcodes.
+//! - Out-of-band data as introduced in Pickle protocol 5.
 //!
 //! # Exported API
 //!
