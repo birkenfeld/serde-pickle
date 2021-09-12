@@ -9,9 +9,9 @@ jobs:
     strategy:
       matrix:
         toolchain:
-          - 1.34.2
+          - 1.41.1
           - stable
-          - nightly
+          # - nightly
     steps:
       - name: Checkout the source code
         uses: actions/checkout@master
