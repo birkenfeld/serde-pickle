@@ -43,10 +43,8 @@ mod struct_tests {
     use std::collections::BTreeMap;
     use serde::{ser, de};
     use serde_derive::{Serialize, Deserialize};
-    use crate::{
-        to_vec, value_to_vec, from_slice, value_from_slice, to_value, from_value,
-        Value, HashableValue
-    };
+    use crate::{HashableValue, SerOptions, Value, from_slice, from_value, to_value,
+                to_vec, value_from_slice, value_to_vec};
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Inner {
@@ -87,6 +85,14 @@ mod struct_tests {
         assert_eq!(py_val, target);
         // Test direct serialization to Value.
         let py_val: Value = to_value(&value).unwrap();
+        assert_eq!(py_val, target);
+    }
+
+    fn test_encode_ok_with_opt<T>(value: T, target: Value, options: SerOptions)
+        where T: PartialEq + ser::Serialize,
+    {
+        let vec = to_vec(&value, options).unwrap();
+        let py_val: Value = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(py_val, target);
     }
 
@@ -139,13 +145,29 @@ mod struct_tests {
     #[test]
     fn encode_enum() {
         test_encode_ok(Animal::Dog,
-                       pyobj!(t=(s="Dog")));
+                       pyobj!(s="Dog"));
         test_encode_ok(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
-                       pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])));
+                       pyobj!(d={s="AntHive" => l=[s="ant", s="aunt"]}));
         test_encode_ok(Animal::Frog("Henry".into(), vec![1, 5]),
-                       pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])));
+                       pyobj!(d={s="Frog" => l=[s="Henry", l=[i=1, i=5]]}));
         test_encode_ok(Animal::Cat { age: 5, name: "Molyneux".into() },
-                       pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})));
+                       pyobj!(d={s="Cat" => d={s="age" => i=5, s="name" => s="Molyneux"}}));
+    }
+
+    #[test]
+    fn encode_enum_compat() {
+        test_encode_ok_with_opt(Animal::Dog,
+                                pyobj!(t=(s="Dog")),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
+                                pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::Frog("Henry".into(), vec![1, 5]),
+                                pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::Cat { age: 5, name: "Molyneux".into() },
+                                pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})),
+                                SerOptions::new().compat_enum_repr());
     }
 
     #[test]

@@ -3,11 +3,14 @@
 ## 1.0 - Sept 2021
 
 - Require Rust 1.41.
+- Support deserializing Pickle protocol 5.
 - Add `DeOptions` and `SerOptions` struct for selecting options when
   deserializing and serializing.  `SerOptions` replaces the `use_proto_3`
   boolean flag for serializer functions.
-- Add a `DeOptions` flag for replacing unresolvable globals by `None`.
-- Support deserializing Pickle protocol 5.
+- Add a `DeOptions` flag for replacing unresolvable globals by `None` (#13).
+- Change default enum serialization to the "standard" representation chosen by
+  e.g. `serde_json` and `serde_yaml`, using dictionaries. Add a `DeOptions`
+  flag for switching back to the old representation (#9).
 
 ## 0.6 - Jan 2020
 

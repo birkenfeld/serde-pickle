@@ -35,12 +35,14 @@ impl Default for PickleProto {
 #[derive(Clone, Debug, Default)]
 pub struct SerOptions {
     proto: PickleProto,
+    compat_enum_repr: bool,
 }
 
 impl SerOptions {
     /// Construct with default options:
     ///
     /// - use pickle protocol v3
+    /// - use the serde-standard Enum representation
     pub fn new() -> Self {
         Default::default()
     }
@@ -48,6 +50,30 @@ impl SerOptions {
     /// Set the used pickle protocol to v2.
     pub fn proto_v2(mut self) -> Self {
         self.proto = PickleProto::V2;
+        self
+    }
+
+    /// Switch Enum serialization to the representation used up to serde-pickle 0.6.
+    ///
+    /// "serde standard" representation (now default):
+    /// ```
+    ///   Variant           ->  'Variant'
+    ///   Variant(T)        ->  {'Variant': T}
+    ///   Variant(T1, T2)   ->  {'Variant': [T1, T2]}
+    ///   Variant { x: T }  ->  {'Variant': {'x': T}}
+    /// ```
+    ///
+    /// "compat" representation:
+    /// ```
+    ///   Variant           ->  ('Variant',)
+    ///   Variant(T)        ->  ('Variant', T)
+    ///   Variant(T1, T2)   ->  ('Variant', [T1, T2])
+    ///   Variant { x: T }  ->  ('Variant', {'x': T})
+    /// ```
+    ///
+    /// When deserializing, `serde-pickle` can handle both representations.
+    pub fn compat_enum_repr(mut self) -> Self {
+        self.compat_enum_repr = true;
         self
     }
 }
@@ -298,7 +324,11 @@ impl<'a, W: io::Write> ser::SerializeTupleVariant for Compound<'a, W> {
     #[inline]
     fn end(self) -> Result<()> {
         self.ser.write_opcode(APPENDS)?;
-        self.ser.write_opcode(TUPLE2)
+        if self.ser.options.compat_enum_repr {
+            self.ser.write_opcode(TUPLE2)
+        } else {
+            self.ser.write_opcode(SETITEM)
+        }
     }
 }
 
@@ -363,7 +393,11 @@ impl<'a, W: io::Write> ser::SerializeStructVariant for Compound<'a, W> {
         if self.state.is_some() {
             self.ser.write_opcode(SETITEMS)?;
         }
-        self.ser.write_opcode(TUPLE2)
+        if self.ser.options.compat_enum_repr {
+            self.ser.write_opcode(TUPLE2)
+        } else {
+            self.ser.write_opcode(SETITEM)
+        }
     }
 }
 
@@ -539,16 +573,15 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         self.write_opcode(NONE)
     }
 
-    // We'll use tuples for serializing enums:
-    // Variant             ('Variant',)
-    // Variant(T)          ('Variant', T)
-    // Variant(T1, T2)     ('Variant', [T1, T2])
-    // Variant { x: T }    ('Variant', {'x': T})
     #[inline]
     fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str)
                               -> Result<()> {
         self.serialize_str(variant)?;
-        self.write_opcode(TUPLE1)
+        if self.options.compat_enum_repr {
+            self.write_opcode(TUPLE1)
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
@@ -560,9 +593,16 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str,
                                                         _variant_index: u32, variant: &'static str,
                                                         value: &T) -> Result<()> {
-        self.serialize_str(variant)?;
-        value.serialize(&mut *self)?;
-        self.write_opcode(TUPLE2)
+        if self.options.compat_enum_repr {
+            self.serialize_str(variant)?;
+            value.serialize(&mut *self)?;
+            self.write_opcode(TUPLE2)
+        } else {
+            self.write_opcode(EMPTY_DICT)?;
+            self.serialize_str(variant)?;
+            value.serialize(&mut *self)?;
+            self.write_opcode(SETITEM)
+        }
     }
 
     #[inline]
@@ -607,6 +647,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                _len: usize) -> Result<Self::SerializeTupleVariant> {
+        if !self.options.compat_enum_repr {
+            self.write_opcode(EMPTY_DICT)?;
+        }
         self.serialize_str(variant)?;
         self.write_opcode(EMPTY_LIST)?;
         self.write_opcode(MARK)?;
@@ -633,6 +676,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                 len: usize) -> Result<Self::SerializeStructVariant> {
+        if !self.options.compat_enum_repr {
+            self.write_opcode(EMPTY_DICT)?;
+        }
         self.serialize_str(variant)?;
         self.serialize_map(Some(len))
     }
