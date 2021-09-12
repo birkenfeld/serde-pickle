@@ -69,22 +69,49 @@ enum Value {
     Dict(Vec<(Value, Value)>),
 }
 
+/// Options for deserializing.
+#[derive(Clone, Debug, Default)]
+pub struct DeOptions {
+    decode_strings: bool,
+    replace_unresolved_globals: bool,
+}
+
+impl DeOptions {
+    /// Construct with default options:
+    ///
+    /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
+    /// - don't replace unresolvable globals by `None`
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Activate decoding strings saved as STRING.
+    pub fn decode_strings(mut self) -> Self {
+        self.decode_strings = true;
+        self
+    }
+
+    /// Activate replacing unresolved globals by `None`.
+    pub fn replace_unresolved_globals(mut self) -> Self {
+        self.replace_unresolved_globals = true;
+        self
+    }
+}
+
 /// Decodes pickle streams into values.
 pub struct Deserializer<R: Read> {
     rdr: BufReader<R>,
+    options: DeOptions,
     pos: usize,
     value: Option<Value>,                  // next value to deserialize
     memo: BTreeMap<MemoId, (Value, i32)>,  // pickle memo (value, number of refs)
     stack: Vec<Value>,                     // topmost items on the stack
     stacks: Vec<Vec<Value>>,               // items further down the stack, between MARKs
-    decode_strings: bool,                  // protocol specific switch
 }
 
 impl<R: Read> Deserializer<R> {
-    /// Construct a new Deserializer.  The second argument decides whether
-    /// strings (STRING opcodes, saved only by protocols 0-2) are decoded as
-    /// UTF-8 strings or left as byte vectors.
-    pub fn new(rdr: R, decode_strings: bool) -> Deserializer<R> {
+    /// Construct a new Deserializer.
+    pub fn new(rdr: R, options: DeOptions) -> Deserializer<R> {
         Deserializer {
             rdr: BufReader::new(rdr),
             pos: 0,
@@ -92,7 +119,7 @@ impl<R: Read> Deserializer<R> {
             memo: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
-            decode_strings,
+            options,
         }
     }
 
@@ -702,7 +729,7 @@ impl<R: Read> Deserializer<R> {
 
     // Decode a string - either as Unicode or as bytes.
     fn decode_string(&self, string: Vec<u8>) -> Result<Value> {
-        if self.decode_strings {
+        if self.options.decode_strings {
             self.decode_unicode(string)
         } else {
             Ok(Value::Bytes(string))
@@ -1164,8 +1191,8 @@ impl<'de: 'a, 'a, R: Read> de::MapAccess<'de> for MapAccess<'a, R> {
 
 
 /// Decodes a value from a `std::io::Read`.
-pub fn from_reader<'de, R: io::Read, T: de::Deserialize<'de>>(rdr: R) -> Result<T> {
-    let mut de = Deserializer::new(rdr, false);
+pub fn from_reader<'de, R: io::Read, T: de::Deserialize<'de>>(rdr: R, options: DeOptions) -> Result<T> {
+    let mut de = Deserializer::new(rdr, options);
     let value = de::Deserialize::deserialize(&mut de)?;
     // Make sure the whole stream has been consumed.
     de.end()?;
@@ -1173,29 +1200,33 @@ pub fn from_reader<'de, R: io::Read, T: de::Deserialize<'de>>(rdr: R) -> Result<
 }
 
 /// Decodes a value from a byte slice `&[u8]`.
-pub fn from_slice<'de, T: de::Deserialize<'de>>(v: &[u8]) -> Result<T> {
-    from_reader(io::Cursor::new(v))
+pub fn from_slice<'de, T: de::Deserialize<'de>>(v: &[u8], options: DeOptions) -> Result<T> {
+    from_reader(io::Cursor::new(v), options)
 }
 
 /// Decodes a value from any iterator supported as a reader.
-pub fn from_iter<'de, E: IterReadItem, I: FusedIterator<Item=E>, T: de::Deserialize<'de>>(it: I) -> Result<T> {
-    from_reader(IterRead::new(it))
+pub fn from_iter<'de, E, I, T>(it: I, options: DeOptions) -> Result<T>
+where E: IterReadItem, I: FusedIterator<Item=E>, T: de::Deserialize<'de>
+{
+    from_reader(IterRead::new(it), options)
 }
 
 /// Decodes a value from a `std::io::Read`.
-pub fn value_from_reader<R: io::Read>(rdr: R) -> Result<value::Value> {
-    let mut de = Deserializer::new(rdr, false);
+pub fn value_from_reader<R: io::Read>(rdr: R, options: DeOptions) -> Result<value::Value> {
+    let mut de = Deserializer::new(rdr, options);
     let value = de.deserialize_value()?;
     de.end()?;
     Ok(value)
 }
 
 /// Decodes a value from a byte slice `&[u8]`.
-pub fn value_from_slice(v: &[u8]) -> Result<value::Value> {
-    value_from_reader(io::Cursor::new(v))
+pub fn value_from_slice(v: &[u8], options: DeOptions) -> Result<value::Value> {
+    value_from_reader(io::Cursor::new(v), options)
 }
 
 /// Decodes a value from any iterator supported as a reader.
-pub fn value_from_iter<E: IterReadItem, I: FusedIterator<Item=E>>(it: I) -> Result<value::Value> {
-    value_from_reader(IterRead::new(it))
+pub fn value_from_iter<E, I>(it: I, options: DeOptions) -> Result<value::Value>
+where E: IterReadItem, I: FusedIterator<Item=E>
+{
+    value_from_reader(IterRead::new(it), options)
 }

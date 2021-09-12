@@ -82,8 +82,8 @@ mod struct_tests {
         where T: PartialEq + ser::Serialize,
     {
         // Test serialization via pickle.
-        let vec = to_vec(&value, true).unwrap();
-        let py_val: Value = value_from_slice(&vec).unwrap();
+        let vec = to_vec(&value, Default::default()).unwrap();
+        let py_val: Value = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(py_val, target);
         // Test direct serialization to Value.
         let py_val: Value = to_value(&value).unwrap();
@@ -94,8 +94,8 @@ mod struct_tests {
         where T: PartialEq + fmt::Debug + de::Deserialize<'de>,
     {
         // Test deserialization from pickle.
-        let vec = value_to_vec(&pyvalue, true).unwrap();
-        let val: T = from_slice(&vec).unwrap();
+        let vec = value_to_vec(&pyvalue, Default::default()).unwrap();
+        let val: T = from_slice(&vec, Default::default()).unwrap();
         assert_eq!(val, target);
         // Test direct deserialization from Value.
         let val: T = from_value(pyvalue).unwrap();
@@ -218,7 +218,7 @@ mod value_tests {
     use quickcheck::{QuickCheck, StdGen};
     use serde_json;
     use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
-    use crate::{Value, HashableValue};
+    use crate::{Value, HashableValue, SerOptions, DeOptions};
     use crate::Deserializer;
     use crate::error::{Error, ErrorCode};
 
@@ -266,7 +266,7 @@ mod value_tests {
         for &(major, proto) in TEST_CASES {
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
             let comparison = get_test_object(major);
-            let unpickled = value_from_reader(file).unwrap();
+            let unpickled = value_from_reader(file, Default::default()).unwrap();
             assert_eq!(unpickled, comparison, "py {}, proto {}", major, proto);
         }
     }
@@ -274,8 +274,8 @@ mod value_tests {
     #[test]
     fn roundtrip() {
         let dict = get_test_object(2);
-        let vec: Vec<_> = value_to_vec(&dict, true).unwrap();
-        let tripped = value_from_slice(&vec).unwrap();
+        let vec: Vec<_> = value_to_vec(&dict, Default::default()).unwrap();
+        let tripped = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(dict, tripped);
     }
 
@@ -283,7 +283,7 @@ mod value_tests {
     fn recursive() {
         for proto in &[0, 1, 2, 3, 4] {
             let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
-            match value_from_reader(file) {
+            match value_from_reader(file, Default::default()) {
                 Err(Error::Syntax(ErrorCode::Recursive)) => { }
                 _ => assert!(false, "wrong/no error returned for recursive structure")
             }
@@ -299,15 +299,15 @@ mod value_tests {
             if *stream.last().unwrap() == b'.' { continue; }
             // These must all fail with an error, since we skip the check if the
             // last byte is a STOP opcode.
-            assert!(value_from_slice(&stream).is_err());
+            assert!(value_from_slice(&stream, Default::default()).is_err());
         }
     }
 
     #[test]
     fn qc_roundtrip() {
         fn roundtrip(original: Value) {
-            let vec: Vec<_> = value_to_vec(&original, true).unwrap();
-            let tripped = value_from_slice(&vec).unwrap();
+            let vec: Vec<_> = value_to_vec(&original, Default::default()).unwrap();
+            let tripped = value_from_slice(&vec, Default::default()).unwrap();
             assert_eq!(original, tripped);
         }
         QuickCheck::new().gen(StdGen::new(thread_rng(), 10))
@@ -326,17 +326,17 @@ mod value_tests {
              "list": [false, 5, "true", 3.8]
             }
         ]"#).unwrap();
-        let vec: Vec<_> = to_vec(&original, true).unwrap();
-        let tripped: serde_json::Value = from_slice(&vec).unwrap();
+        let vec: Vec<_> = to_vec(&original, Default::default()).unwrap();
+        let tripped: serde_json::Value = from_slice(&vec, Default::default()).unwrap();
         assert_eq!(original, tripped);
     }
 
     #[test]
     fn bytestring_v2_py3_roundtrip() {
         let original = Value::Bytes(b"123\xff\xfe".to_vec());
-        let vec: Vec<_> = value_to_vec(&original, false).unwrap();
+        let vec: Vec<_> = value_to_vec(&original, SerOptions::new().proto_v2()).unwrap();
         // Python 3 default deserializer attempts to decode strings
-        let mut de = Deserializer::new(vec.as_slice(), true);
+        let mut de = Deserializer::new(vec.as_slice(), DeOptions::new().decode_strings());
         let tripped: Value = de.deserialize_value().unwrap();
         assert_eq!(original, tripped);
         de.end().unwrap();
@@ -369,7 +369,7 @@ mod benches {
         }
         // Append all
         buffer.extend(b"e.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -382,7 +382,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.extend(b"e.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -396,7 +396,7 @@ mod benches {
             buffer.extend(b"h\x01");
         }
         buffer.extend(b"u.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -411,7 +411,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.push(b'.');
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -425,7 +425,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.push(b'.');
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -435,8 +435,8 @@ mod benches {
             list.push(pyobj!(i=i));
         }
         let tuple = Value::Tuple(list);
-        let buffer = value_to_vec(&tuple, true).unwrap();
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        let buffer = value_to_vec(&tuple, Default::default()).unwrap();
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -446,7 +446,7 @@ mod benches {
             list.push(pyobj!(l=[i=i]));
         }
         let list = Value::List(list);
-        b.iter(|| value_to_vec(&list, true).unwrap());
+        b.iter(|| value_to_vec(&list, Default::default()).unwrap());
     }
 
     #[bench]
@@ -456,6 +456,6 @@ mod benches {
             dict.insert(hpyobj!(i=i), pyobj!(l=[i=i]));
         }
         let dict = Value::Dict(dict);
-        b.iter(|| value_to_vec(&dict, true).unwrap());
+        b.iter(|| value_to_vec(&dict, Default::default()).unwrap());
     }
 }

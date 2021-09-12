@@ -67,6 +67,7 @@
 
 pub use self::ser::{
     Serializer,
+    SerOptions,
     to_writer,
     to_vec,
     value_to_writer,
@@ -75,6 +76,7 @@ pub use self::ser::{
 
 pub use self::de::{
     Deserializer,
+    DeOptions,
     from_reader,
     from_slice,
     from_iter,

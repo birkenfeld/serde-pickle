@@ -18,16 +18,49 @@ use super::consts::*;
 use super::error::{Error, Result};
 use super::value::{Value, HashableValue};
 
+/// Supported pickle protocols for writing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickleProto {
+    V2,
+    V3,
+}
+
+impl Default for PickleProto {
+    fn default() -> Self {
+        Self::V3
+    }
+}
+
+/// Options for serializing.
+#[derive(Clone, Debug, Default)]
+pub struct SerOptions {
+    proto: PickleProto,
+}
+
+impl SerOptions {
+    /// Construct with default options:
+    ///
+    /// - use pickle protocol v3
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the used pickle protocol to v2.
+    pub fn proto_v2(mut self) -> Self {
+        self.proto = PickleProto::V2;
+        self
+    }
+}
 
 /// A structure for serializing Rust values into a Pickle stream.
 pub struct Serializer<W> {
     writer: W,
-    use_proto_3: bool,
+    options: SerOptions,
 }
 
 impl<W: io::Write> Serializer<W> {
-    pub fn new(writer: W, use_proto_3: bool) -> Self {
-        Serializer { writer, use_proto_3 }
+    pub fn new(writer: W, options: SerOptions) -> Self {
+        Serializer { writer, options }
     }
 
     /// Unwrap the `Writer` from the `Serializer`.
@@ -167,7 +200,7 @@ impl<W: io::Write> Serializer<W> {
 
     fn serialize_set(&mut self, items: &BTreeSet<HashableValue>, name: &[u8]) -> Result<()> {
         self.write_opcode(GLOBAL)?;
-        if self.use_proto_3 {
+        if self.options.proto == PickleProto::V3 {
             self.writer.write_all(b"builtins\n")?;
         } else {
             self.writer.write_all(b"__builtin__\n")?;
@@ -462,7 +495,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_bytes(self, value: &[u8]) -> Result<()> {
-        if self.use_proto_3 {
+        if self.options.proto == PickleProto::V3 {
             if value.len() < 256 {
                 self.write_opcode(SHORT_BINBYTES)?;
                 self.writer.write_u8(value.len() as u8)?;
@@ -605,16 +638,16 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 }
 
-fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, use_proto_3: bool) -> Result<()>
+fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, options: SerOptions) -> Result<()>
     where F: FnOnce(&mut Serializer<W>) -> Result<()>
 {
     writer.write_all(&[PROTO])?;
-    if use_proto_3 {
+    if options.proto == PickleProto::V3 {
         writer.write_all(b"\x03")?;
     } else {
         writer.write_all(b"\x02")?;
     }
-    let mut ser = Serializer::new(writer, use_proto_3);
+    let mut ser = Serializer::new(writer, options);
     inner(&mut ser)?;
     let mut writer = ser.into_inner();
     writer.write_all(&[STOP]).map_err(From::from)
@@ -622,30 +655,30 @@ fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, use_proto_3: bool) -> Re
 
 
 /// Encode the value into a pickle stream.
-pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, use_proto_3: bool)
+pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, options: SerOptions)
                                      -> Result<()> {
-    wrap_write(writer, |ser| ser.serialize_value(value), use_proto_3)
+    wrap_write(writer, |ser| ser.serialize_value(value), options)
 }
 
 /// Encode the specified struct into a `[u8]` writer.
 #[inline]
-pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, use_proto_3: bool)
+pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, options: SerOptions)
                                              -> Result<()> {
-    wrap_write(writer, |ser| value.serialize(ser), use_proto_3)
+    wrap_write(writer, |ser| value.serialize(ser), options)
 }
 
 /// Encode the value into a `Vec<u8>` buffer.
 #[inline]
-pub fn value_to_vec(value: &Value, use_proto_3: bool) -> Result<Vec<u8>> {
+pub fn value_to_vec(value: &Value, options: SerOptions) -> Result<Vec<u8>> {
     let mut writer = Vec::with_capacity(128);
-    value_to_writer(&mut writer, value, use_proto_3)?;
+    value_to_writer(&mut writer, value, options)?;
     Ok(writer)
 }
 
 /// Encode the specified struct into a `Vec<u8>` buffer.
 #[inline]
-pub fn to_vec<T: Serialize>(value: &T, use_proto_3: bool) -> Result<Vec<u8>> {
+pub fn to_vec<T: Serialize>(value: &T, options: SerOptions) -> Result<Vec<u8>> {
     let mut writer = Vec::with_capacity(128);
-    to_writer(&mut writer, value, use_proto_3)?;
+    to_writer(&mut writer, value, options)?;
     Ok(writer)
 }
