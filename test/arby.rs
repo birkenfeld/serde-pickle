@@ -9,6 +9,7 @@
 use std::i64;
 use num_bigint::BigInt;
 use quickcheck::{Arbitrary, Gen, empty_shrinker};
+use rand::Rng;
 use crate::{Value, HashableValue};
 
 const MAX_DEPTH: u32 = 1;

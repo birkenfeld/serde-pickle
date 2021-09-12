@@ -214,7 +214,7 @@ mod value_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter::FromIterator;
     use num_bigint::BigInt;
-    use rand::{Rng, thread_rng};
+    use rand::{RngCore, thread_rng};
     use quickcheck::{QuickCheck, StdGen};
     use serde_json;
     use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};

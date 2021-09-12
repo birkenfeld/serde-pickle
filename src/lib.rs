@@ -61,7 +61,7 @@
 //!
 //! # Minimum Supported Rust Version
 //!
-//! The minimum supported version of the toolchain is 1.34.2.
+//! The minimum supported version of the toolchain is 1.41.1.
 
 #![cfg_attr(feature = "unstable", feature(test))]
 
