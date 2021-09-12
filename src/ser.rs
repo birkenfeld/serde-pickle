@@ -56,7 +56,7 @@ impl SerOptions {
     /// Switch Enum serialization to the representation used up to serde-pickle 0.6.
     ///
     /// "serde standard" representation (now default):
-    /// ```
+    /// ```text
     ///   Variant           ->  'Variant'
     ///   Variant(T)        ->  {'Variant': T}
     ///   Variant(T1, T2)   ->  {'Variant': [T1, T2]}
@@ -64,7 +64,7 @@ impl SerOptions {
     /// ```
     ///
     /// "compat" representation:
-    /// ```
+    /// ```text
     ///   Variant           ->  ('Variant',)
     ///   Variant(T)        ->  ('Variant', T)
     ///   Variant(T1, T2)   ->  ('Variant', [T1, T2])
