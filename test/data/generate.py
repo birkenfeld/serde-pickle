@@ -20,6 +20,10 @@ class Class(object):
     def __init__(self):
         self.attr = 5
 
+class ReduceClass(object):
+    def __reduce__(self):
+        return (ReduceClass, ())
+
 # A test object that generates all the types supported, with HashableValue
 # and normal Value variants.
 test_object = {
@@ -58,3 +62,7 @@ rec_list.append(([rec_list], ))
 for proto in range(max_proto + 1):
     with open('test_recursive_proto%d.pickle' % proto, 'wb') as fp:
         pickle.dump(rec_list, fp, proto)
+
+# Generate a GLOBAL reference that leads to an unresolvable global.
+with open('test_unresolvable_global.pickle', 'wb') as fp:
+    pickle.dump(ReduceClass(), fp, max_proto)

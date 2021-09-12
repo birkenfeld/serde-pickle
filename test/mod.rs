@@ -341,6 +341,16 @@ mod value_tests {
         assert_eq!(original, tripped);
         de.end().unwrap();
     }
+
+    #[test]
+    fn unresolvable_global() {
+        let data = std::fs::read("test/data/test_unresolvable_global.pickle").unwrap();
+        assert!(value_from_slice(&data, Default::default()).is_err());
+        let val = value_from_slice(&data, DeOptions::new().replace_unresolved_globals()).unwrap();
+        assert_eq!(val, Value::None);
+        let serde_val: serde_json::Value = from_slice(&data, DeOptions::new().replace_unresolved_globals()).unwrap();
+        assert_eq!(serde_val, serde_json::Value::Null);
+    }
 }
 
 #[cfg(feature = "unstable")]

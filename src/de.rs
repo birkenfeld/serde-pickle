@@ -961,7 +961,13 @@ impl<R: Read> Deserializer<R> {
             Value::MemoRef(memo_id) => {
                 self.resolve_recursive(memo_id, (), |slf, (), value| slf.convert_value(value))
             },
-            Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
+            Value::Global(_) => {
+                if self.options.replace_unresolved_globals {
+                    Ok(value::Value::None)
+                } else {
+                    Err(Error::Syntax(ErrorCode::UnresolvedGlobal))
+                }
+            },
         }
     }
 }
@@ -1022,7 +1028,13 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
                     slf.deserialize_any(visitor)
                 })
             },
-            Value::Global(_) => Err(Error::Syntax(ErrorCode::UnresolvedGlobal)),
+            Value::Global(_) => {
+                if self.options.replace_unresolved_globals {
+                    visitor.visit_unit()
+                } else {
+                    Err(Error::Syntax(ErrorCode::UnresolvedGlobal))
+                }
+            },
         }
     }
 
