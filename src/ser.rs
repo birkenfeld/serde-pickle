@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2021 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -18,16 +18,75 @@ use super::consts::*;
 use super::error::{Error, Result};
 use super::value::{Value, HashableValue};
 
+/// Supported pickle protocols for writing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickleProto {
+    V2,
+    V3,
+}
+
+impl Default for PickleProto {
+    fn default() -> Self {
+        Self::V3
+    }
+}
+
+/// Options for serializing.
+#[derive(Clone, Debug, Default)]
+pub struct SerOptions {
+    proto: PickleProto,
+    compat_enum_repr: bool,
+}
+
+impl SerOptions {
+    /// Construct with default options:
+    ///
+    /// - use pickle protocol v3
+    /// - use the serde-standard Enum representation
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the used pickle protocol to v2.
+    pub fn proto_v2(mut self) -> Self {
+        self.proto = PickleProto::V2;
+        self
+    }
+
+    /// Switch Enum serialization to the representation used up to serde-pickle 0.6.
+    ///
+    /// "serde standard" representation (now default):
+    /// ```text
+    ///   Variant           ->  'Variant'
+    ///   Variant(T)        ->  {'Variant': T}
+    ///   Variant(T1, T2)   ->  {'Variant': [T1, T2]}
+    ///   Variant { x: T }  ->  {'Variant': {'x': T}}
+    /// ```
+    ///
+    /// "compat" representation:
+    /// ```text
+    ///   Variant           ->  ('Variant',)
+    ///   Variant(T)        ->  ('Variant', T)
+    ///   Variant(T1, T2)   ->  ('Variant', [T1, T2])
+    ///   Variant { x: T }  ->  ('Variant', {'x': T})
+    /// ```
+    ///
+    /// When deserializing, `serde-pickle` can handle both representations.
+    pub fn compat_enum_repr(mut self) -> Self {
+        self.compat_enum_repr = true;
+        self
+    }
+}
 
 /// A structure for serializing Rust values into a Pickle stream.
 pub struct Serializer<W> {
     writer: W,
-    use_proto_3: bool,
+    options: SerOptions,
 }
 
 impl<W: io::Write> Serializer<W> {
-    pub fn new(writer: W, use_proto_3: bool) -> Self {
-        Serializer { writer, use_proto_3 }
+    pub fn new(writer: W, options: SerOptions) -> Self {
+        Serializer { writer, options }
     }
 
     /// Unwrap the `Writer` from the `Serializer`.
@@ -167,7 +226,7 @@ impl<W: io::Write> Serializer<W> {
 
     fn serialize_set(&mut self, items: &BTreeSet<HashableValue>, name: &[u8]) -> Result<()> {
         self.write_opcode(GLOBAL)?;
-        if self.use_proto_3 {
+        if self.options.proto == PickleProto::V3 {
             self.writer.write_all(b"builtins\n")?;
         } else {
             self.writer.write_all(b"__builtin__\n")?;
@@ -265,7 +324,11 @@ impl<'a, W: io::Write> ser::SerializeTupleVariant for Compound<'a, W> {
     #[inline]
     fn end(self) -> Result<()> {
         self.ser.write_opcode(APPENDS)?;
-        self.ser.write_opcode(TUPLE2)
+        if self.ser.options.compat_enum_repr {
+            self.ser.write_opcode(TUPLE2)
+        } else {
+            self.ser.write_opcode(SETITEM)
+        }
     }
 }
 
@@ -330,7 +393,11 @@ impl<'a, W: io::Write> ser::SerializeStructVariant for Compound<'a, W> {
         if self.state.is_some() {
             self.ser.write_opcode(SETITEMS)?;
         }
-        self.ser.write_opcode(TUPLE2)
+        if self.ser.options.compat_enum_repr {
+            self.ser.write_opcode(TUPLE2)
+        } else {
+            self.ser.write_opcode(SETITEM)
+        }
     }
 }
 
@@ -462,7 +529,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_bytes(self, value: &[u8]) -> Result<()> {
-        if self.use_proto_3 {
+        if self.options.proto == PickleProto::V3 {
             if value.len() < 256 {
                 self.write_opcode(SHORT_BINBYTES)?;
                 self.writer.write_u8(value.len() as u8)?;
@@ -506,16 +573,15 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         self.write_opcode(NONE)
     }
 
-    // We'll use tuples for serializing enums:
-    // Variant             ('Variant',)
-    // Variant(T)          ('Variant', T)
-    // Variant(T1, T2)     ('Variant', [T1, T2])
-    // Variant { x: T }    ('Variant', {'x': T})
     #[inline]
     fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str)
                               -> Result<()> {
         self.serialize_str(variant)?;
-        self.write_opcode(TUPLE1)
+        if self.options.compat_enum_repr {
+            self.write_opcode(TUPLE1)
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
@@ -527,9 +593,16 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str,
                                                         _variant_index: u32, variant: &'static str,
                                                         value: &T) -> Result<()> {
-        self.serialize_str(variant)?;
-        value.serialize(&mut *self)?;
-        self.write_opcode(TUPLE2)
+        if self.options.compat_enum_repr {
+            self.serialize_str(variant)?;
+            value.serialize(&mut *self)?;
+            self.write_opcode(TUPLE2)
+        } else {
+            self.write_opcode(EMPTY_DICT)?;
+            self.serialize_str(variant)?;
+            value.serialize(&mut *self)?;
+            self.write_opcode(SETITEM)
+        }
     }
 
     #[inline]
@@ -574,6 +647,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                _len: usize) -> Result<Self::SerializeTupleVariant> {
+        if !self.options.compat_enum_repr {
+            self.write_opcode(EMPTY_DICT)?;
+        }
         self.serialize_str(variant)?;
         self.write_opcode(EMPTY_LIST)?;
         self.write_opcode(MARK)?;
@@ -600,21 +676,24 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
                                 len: usize) -> Result<Self::SerializeStructVariant> {
+        if !self.options.compat_enum_repr {
+            self.write_opcode(EMPTY_DICT)?;
+        }
         self.serialize_str(variant)?;
         self.serialize_map(Some(len))
     }
 }
 
-fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, use_proto_3: bool) -> Result<()>
+fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, options: SerOptions) -> Result<()>
     where F: FnOnce(&mut Serializer<W>) -> Result<()>
 {
     writer.write_all(&[PROTO])?;
-    if use_proto_3 {
+    if options.proto == PickleProto::V3 {
         writer.write_all(b"\x03")?;
     } else {
         writer.write_all(b"\x02")?;
     }
-    let mut ser = Serializer::new(writer, use_proto_3);
+    let mut ser = Serializer::new(writer, options);
     inner(&mut ser)?;
     let mut writer = ser.into_inner();
     writer.write_all(&[STOP]).map_err(From::from)
@@ -622,30 +701,30 @@ fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, use_proto_3: bool) -> Re
 
 
 /// Encode the value into a pickle stream.
-pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, use_proto_3: bool)
+pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, options: SerOptions)
                                      -> Result<()> {
-    wrap_write(writer, |ser| ser.serialize_value(value), use_proto_3)
+    wrap_write(writer, |ser| ser.serialize_value(value), options)
 }
 
 /// Encode the specified struct into a `[u8]` writer.
 #[inline]
-pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, use_proto_3: bool)
+pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, options: SerOptions)
                                              -> Result<()> {
-    wrap_write(writer, |ser| value.serialize(ser), use_proto_3)
+    wrap_write(writer, |ser| value.serialize(ser), options)
 }
 
 /// Encode the value into a `Vec<u8>` buffer.
 #[inline]
-pub fn value_to_vec(value: &Value, use_proto_3: bool) -> Result<Vec<u8>> {
+pub fn value_to_vec(value: &Value, options: SerOptions) -> Result<Vec<u8>> {
     let mut writer = Vec::with_capacity(128);
-    value_to_writer(&mut writer, value, use_proto_3)?;
+    value_to_writer(&mut writer, value, options)?;
     Ok(writer)
 }
 
 /// Encode the specified struct into a `Vec<u8>` buffer.
 #[inline]
-pub fn to_vec<T: Serialize>(value: &T, use_proto_3: bool) -> Result<Vec<u8>> {
+pub fn to_vec<T: Serialize>(value: &T, options: SerOptions) -> Result<Vec<u8>> {
     let mut writer = Vec::with_capacity(128);
-    to_writer(&mut writer, value, use_proto_3)?;
+    to_writer(&mut writer, value, options)?;
     Ok(writer)
 }

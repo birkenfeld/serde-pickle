@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2021 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -499,9 +499,9 @@ impl<'a> ser::SerializeTupleVariant for SerializeTupleVariant<'a> {
 
     #[inline]
     fn end(self) -> Result<Value> {
-        let var = self.variant.serialize(&mut *self.ser)?;
-        let seq = Value::List(self.state);
-        Ok(Value::Tuple(vec![var, seq]))
+        let mut d = BTreeMap::new();
+        d.insert(HashableValue::String(self.variant.into()), Value::List(self.state));
+        Ok(Value::Dict(d))
     }
 }
 
@@ -567,9 +567,9 @@ impl<'a> ser::SerializeStructVariant for SerializeMap<'a> {
 
     #[inline]
     fn end(self) -> Result<Value> {
-        let var = self.variant.serialize(&mut *self.ser)?;
-        let map = Value::Dict(self.state);
-        Ok(Value::Tuple(vec![var, map]))
+        let mut d = BTreeMap::new();
+        d.insert(HashableValue::String(self.variant.into()), Value::Dict(self.state));
+        Ok(Value::Dict(d))
     }
 }
 
@@ -674,7 +674,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     #[inline]
     fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str)
                               -> Result<Value> {
-        Ok(Value::Tuple(vec![Value::String(variant.into())]))
+        Ok(Value::String(variant.into()))
     }
 
     #[inline]
@@ -686,7 +686,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     #[inline]
     fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str, _variant_index: u32,
                                                         variant: &'static str, value: &T) -> Result<Value> {
-        Ok(Value::Tuple(vec![Value::String(variant.into()), to_value(&value)?]))
+        let mut d = BTreeMap::new();
+        d.insert(HashableValue::String(variant.into()), to_value(&value)?);
+        Ok(Value::Dict(d))
     }
 
     #[inline]

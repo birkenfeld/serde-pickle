@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2021 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -43,10 +43,8 @@ mod struct_tests {
     use std::collections::BTreeMap;
     use serde::{ser, de};
     use serde_derive::{Serialize, Deserialize};
-    use crate::{
-        to_vec, value_to_vec, from_slice, value_from_slice, to_value, from_value,
-        Value, HashableValue
-    };
+    use crate::{HashableValue, SerOptions, Value, from_slice, from_value, to_value,
+                to_vec, value_from_slice, value_to_vec};
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Inner {
@@ -82,11 +80,19 @@ mod struct_tests {
         where T: PartialEq + ser::Serialize,
     {
         // Test serialization via pickle.
-        let vec = to_vec(&value, true).unwrap();
-        let py_val: Value = value_from_slice(&vec).unwrap();
+        let vec = to_vec(&value, Default::default()).unwrap();
+        let py_val: Value = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(py_val, target);
         // Test direct serialization to Value.
         let py_val: Value = to_value(&value).unwrap();
+        assert_eq!(py_val, target);
+    }
+
+    fn test_encode_ok_with_opt<T>(value: T, target: Value, options: SerOptions)
+        where T: PartialEq + ser::Serialize,
+    {
+        let vec = to_vec(&value, options).unwrap();
+        let py_val: Value = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(py_val, target);
     }
 
@@ -94,8 +100,8 @@ mod struct_tests {
         where T: PartialEq + fmt::Debug + de::Deserialize<'de>,
     {
         // Test deserialization from pickle.
-        let vec = value_to_vec(&pyvalue, true).unwrap();
-        let val: T = from_slice(&vec).unwrap();
+        let vec = value_to_vec(&pyvalue, Default::default()).unwrap();
+        let val: T = from_slice(&vec, Default::default()).unwrap();
         assert_eq!(val, target);
         // Test direct deserialization from Value.
         let val: T = from_value(pyvalue).unwrap();
@@ -139,13 +145,29 @@ mod struct_tests {
     #[test]
     fn encode_enum() {
         test_encode_ok(Animal::Dog,
-                       pyobj!(t=(s="Dog")));
+                       pyobj!(s="Dog"));
         test_encode_ok(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
-                       pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])));
+                       pyobj!(d={s="AntHive" => l=[s="ant", s="aunt"]}));
         test_encode_ok(Animal::Frog("Henry".into(), vec![1, 5]),
-                       pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])));
+                       pyobj!(d={s="Frog" => l=[s="Henry", l=[i=1, i=5]]}));
         test_encode_ok(Animal::Cat { age: 5, name: "Molyneux".into() },
-                       pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})));
+                       pyobj!(d={s="Cat" => d={s="age" => i=5, s="name" => s="Molyneux"}}));
+    }
+
+    #[test]
+    fn encode_enum_compat() {
+        test_encode_ok_with_opt(Animal::Dog,
+                                pyobj!(t=(s="Dog")),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::AntHive(vec!["ant".into(), "aunt".into()]),
+                                pyobj!(t=(s="AntHive", l=[s="ant", s="aunt"])),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::Frog("Henry".into(), vec![1, 5]),
+                                pyobj!(t=(s="Frog", l=[s="Henry", l=[i=1, i=5]])),
+                                SerOptions::new().compat_enum_repr());
+        test_encode_ok_with_opt(Animal::Cat { age: 5, name: "Molyneux".into() },
+                                pyobj!(t=(s="Cat", d={s="age" => i=5, s="name" => s="Molyneux"})),
+                                SerOptions::new().compat_enum_repr());
     }
 
     #[test]
@@ -214,18 +236,18 @@ mod value_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter::FromIterator;
     use num_bigint::BigInt;
-    use rand::{Rng, thread_rng};
+    use rand::{RngCore, thread_rng};
     use quickcheck::{QuickCheck, StdGen};
     use serde_json;
     use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
-    use crate::{Value, HashableValue};
+    use crate::{Value, HashableValue, SerOptions, DeOptions};
     use crate::Deserializer;
     use crate::error::{Error, ErrorCode};
 
     // combinations of (python major, pickle proto) to test
-    const TEST_CASES: &'static [(u32, u32)] = &[
+    const TEST_CASES: &[(u32, u32)] = &[
         (2, 0), (2, 1), (2, 2),
-        (3, 0), (3, 1), (3, 2), (3, 3), (3, 4)
+        (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5),
     ];
 
     fn get_test_object(pyver: u32) -> Value {
@@ -266,7 +288,7 @@ mod value_tests {
         for &(major, proto) in TEST_CASES {
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
             let comparison = get_test_object(major);
-            let unpickled = value_from_reader(file).unwrap();
+            let unpickled = value_from_reader(file, Default::default()).unwrap();
             assert_eq!(unpickled, comparison, "py {}, proto {}", major, proto);
         }
     }
@@ -274,16 +296,16 @@ mod value_tests {
     #[test]
     fn roundtrip() {
         let dict = get_test_object(2);
-        let vec: Vec<_> = value_to_vec(&dict, true).unwrap();
-        let tripped = value_from_slice(&vec).unwrap();
+        let vec: Vec<_> = value_to_vec(&dict, Default::default()).unwrap();
+        let tripped = value_from_slice(&vec, Default::default()).unwrap();
         assert_eq!(dict, tripped);
     }
 
     #[test]
     fn recursive() {
-        for proto in &[0, 1, 2, 3, 4] {
+        for proto in &[0, 1, 2, 3, 4, 5] {
             let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
-            match value_from_reader(file) {
+            match value_from_reader(file, Default::default()) {
                 Err(Error::Syntax(ErrorCode::Recursive)) => { }
                 _ => assert!(false, "wrong/no error returned for recursive structure")
             }
@@ -299,15 +321,15 @@ mod value_tests {
             if *stream.last().unwrap() == b'.' { continue; }
             // These must all fail with an error, since we skip the check if the
             // last byte is a STOP opcode.
-            assert!(value_from_slice(&stream).is_err());
+            assert!(value_from_slice(&stream, Default::default()).is_err());
         }
     }
 
     #[test]
     fn qc_roundtrip() {
         fn roundtrip(original: Value) {
-            let vec: Vec<_> = value_to_vec(&original, true).unwrap();
-            let tripped = value_from_slice(&vec).unwrap();
+            let vec: Vec<_> = value_to_vec(&original, Default::default()).unwrap();
+            let tripped = value_from_slice(&vec, Default::default()).unwrap();
             assert_eq!(original, tripped);
         }
         QuickCheck::new().gen(StdGen::new(thread_rng(), 10))
@@ -326,20 +348,30 @@ mod value_tests {
              "list": [false, 5, "true", 3.8]
             }
         ]"#).unwrap();
-        let vec: Vec<_> = to_vec(&original, true).unwrap();
-        let tripped: serde_json::Value = from_slice(&vec).unwrap();
+        let vec: Vec<_> = to_vec(&original, Default::default()).unwrap();
+        let tripped: serde_json::Value = from_slice(&vec, Default::default()).unwrap();
         assert_eq!(original, tripped);
     }
 
     #[test]
     fn bytestring_v2_py3_roundtrip() {
         let original = Value::Bytes(b"123\xff\xfe".to_vec());
-        let vec: Vec<_> = value_to_vec(&original, false).unwrap();
+        let vec: Vec<_> = value_to_vec(&original, SerOptions::new().proto_v2()).unwrap();
         // Python 3 default deserializer attempts to decode strings
-        let mut de = Deserializer::new(vec.as_slice(), true);
+        let mut de = Deserializer::new(vec.as_slice(), DeOptions::new().decode_strings());
         let tripped: Value = de.deserialize_value().unwrap();
         assert_eq!(original, tripped);
         de.end().unwrap();
+    }
+
+    #[test]
+    fn unresolvable_global() {
+        let data = std::fs::read("test/data/test_unresolvable_global.pickle").unwrap();
+        assert!(value_from_slice(&data, Default::default()).is_err());
+        let val = value_from_slice(&data, DeOptions::new().replace_unresolved_globals()).unwrap();
+        assert_eq!(val, Value::None);
+        let serde_val: serde_json::Value = from_slice(&data, DeOptions::new().replace_unresolved_globals()).unwrap();
+        assert_eq!(serde_val, serde_json::Value::Null);
     }
 }
 
@@ -369,7 +401,7 @@ mod benches {
         }
         // Append all
         buffer.extend(b"e.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -382,7 +414,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.extend(b"e.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -396,7 +428,7 @@ mod benches {
             buffer.extend(b"h\x01");
         }
         buffer.extend(b"u.");
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -411,7 +443,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.push(b'.');
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -425,7 +457,7 @@ mod benches {
             buffer.push(b'a');
         }
         buffer.push(b'.');
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -435,8 +467,8 @@ mod benches {
             list.push(pyobj!(i=i));
         }
         let tuple = Value::Tuple(list);
-        let buffer = value_to_vec(&tuple, true).unwrap();
-        b.iter(|| value_from_slice(&buffer).unwrap());
+        let buffer = value_to_vec(&tuple, Default::default()).unwrap();
+        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
     }
 
     #[bench]
@@ -446,7 +478,7 @@ mod benches {
             list.push(pyobj!(l=[i=i]));
         }
         let list = Value::List(list);
-        b.iter(|| value_to_vec(&list, true).unwrap());
+        b.iter(|| value_to_vec(&list, Default::default()).unwrap());
     }
 
     #[bench]
@@ -456,6 +488,6 @@ mod benches {
             dict.insert(hpyobj!(i=i), pyobj!(l=[i=i]));
         }
         let dict = Value::Dict(dict);
-        b.iter(|| value_to_vec(&dict, true).unwrap());
+        b.iter(|| value_to_vec(&dict, Default::default()).unwrap());
     }
 }
