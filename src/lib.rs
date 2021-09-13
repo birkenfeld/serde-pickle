@@ -70,7 +70,7 @@
 //!
 //! ```
 //! use std::io::Read;
-//! use serde_pickle::{Deserializer, Result};
+//! use serde_pickle::{Deserializer, Result, DeOptions};
 //! use serde::Deserialize;
 //!
 //! struct PickleReader<R>
@@ -84,7 +84,7 @@
 //! {
 //!    fn new(reader: R) -> PickleReader<R> {
 //!        PickleReader {
-//!            de: Deserializer::new(reader, false),
+//!            de: Deserializer::new(reader, DeOptions::new()),
 //!        }
 //!    }
 //!
