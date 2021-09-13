@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1 - Sep 2021
+
+- Support objects reduced to integers via `__reduce__` (#17).
+
 ## 1.0 - Sep 2021
 
 - Require Rust 1.41.
