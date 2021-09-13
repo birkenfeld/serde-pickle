@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2021 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -69,6 +69,11 @@ pub const OBJ              : u8 = b'o';    // build & push class instance
 pub const BUILD            : u8 = b'b';    // call __setstate__ or __dict__.update()
 pub const NEWOBJ           : u8 = b'\x81'; // build object by applying cls.__new__ to argtuple
 pub const NEWOBJ_EX        : u8 = b'\x92'; // like NEWOBJ but work with keyword only arguments
+pub const BYTEARRAY8       : u8 = b'\x96'; // push bytearray
+
+// Ops used for out-of-band buffers; these are unsupported.
+// pub const NEXT_BUFFER      : u8 = b'\x97'; // push next out-of-band buffer
+// pub const READONLY_BUFFER  : u8 = b'\x98'; // make top of stack readonly
 
 // Ops only used for recursive objects; these are unsupported.
 // pub const PERSID           : u8 = b'P';    // push persistent object; id is taken from string arg

@@ -25,7 +25,7 @@ serde-pickle = "0.6"
 Requirements
 ============
 
-Minimum supported Rust version is 1.34.2.
+Minimum supported Rust version is 1.41.1.
 
 Usage
 =====
@@ -44,13 +44,14 @@ fn main() {
     map.insert("y".to_string(), 2.0);
 
     // Serialize the map into a pickle stream.
-    // The second argument selects pickle version 3.
-    let serialized = serde_pickle::to_vec(&map, true).unwrap();
+    // The second argument are serialization options.
+    let serialized = serde_pickle::to_vec(&map, Default::default()).unwrap();
 
     // Deserialize the pickle stream back into a map.
     // Because we compare it to the original `map` below, Rust infers
     // the type of `deserialized` and lets serde work its magic.
-    let deserialized = serde_pickle::from_slice(&serialized).unwrap();
+    // The second argument are additional deserialization options.
+    let deserialized = serde_pickle::from_slice(&serialized, Default::default()).unwrap();
     assert_eq!(map, deserialized);
 }
 ```

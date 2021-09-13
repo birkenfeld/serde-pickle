@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2020 Georg Brandl.  Licensed under the Apache License,
+// Copyright (c) 2015-2021 Georg Brandl.  Licensed under the Apache License,
 // Version 2.0 <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0>
 // or the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at
 // your option. This file may not be copied, modified, or distributed except
@@ -37,20 +37,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match &*args[1] {
         "decode" => {
-            let decoded: pickle::Value = pickle::value_from_reader(reader)?;
+            let decoded: pickle::Value = pickle::value_from_reader(reader, Default::default())?;
             println!("{:#?}", decoded);
         },
         "transcode" => {
-            let decoded: pickle::Value = pickle::value_from_reader(reader)?;
-            pickle::value_to_writer(&mut stdout(), &decoded, true)?;
+            let decoded: pickle::Value = pickle::value_from_reader(reader, Default::default())?;
+            pickle::value_to_writer(&mut stdout(), &decoded, Default::default())?;
         },
         "to_json" => {
-            let decoded: json::Value = pickle::from_reader(reader)?;
+            let decoded: json::Value = pickle::from_reader(reader, Default::default())?;
             println!("{:#?}", decoded);
         },
         "from_json" => {
             let decoded: json::Value = json::from_reader(reader)?;
-            pickle::to_writer(&mut stdout(), &decoded, false)?;
+            pickle::to_writer(&mut stdout(), &decoded, pickle::SerOptions::new().proto_v2())?;
         }
         _ => {
             println!("No such subcommand.");
