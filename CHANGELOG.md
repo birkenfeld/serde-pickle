@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0 - Sept 2021
+## 1.0 - Sep 2021
 
 - Require Rust 1.41.
 - Support deserializing Pickle protocol 5.
