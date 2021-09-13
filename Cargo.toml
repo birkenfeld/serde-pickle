@@ -1,6 +1,6 @@
 [package]
 name = "serde-pickle"
-version = "0.6.3"
+version = "1.0.0"
 authors = ["Georg Brandl <georg@python.org>"]
 license = "MIT/Apache-2.0"
 description = "A serde-based serialization library for Python's pickle format"
