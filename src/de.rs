@@ -9,7 +9,6 @@
 //! Note: Serde's interface doesn't support all of Python's primitive types.  In
 //! order to deserialize a pickle stream to `value::Value`, use the
 //! `value_from_*` functions exported here, not the generic `from_*` functions.
-//!
 
 use std::io;
 use std::mem;
