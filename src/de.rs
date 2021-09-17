@@ -10,50 +10,6 @@
 //! order to deserialize a pickle stream to `value::Value`, use the
 //! `value_from_*` functions exported here, not the generic `from_*` functions.
 //!
-//! # Streaming multiple objects
-//!
-//! By default `(value_)from_reader` closes the input stream. It is possible
-//! to deserialize multiple pickle objects from a single stream by
-//! implementing a custom reader.
-//!
-//! ```
-//! use std::io::Read;
-//! use serde_pickle::{Deserializer, Result, DeOptions};
-//! use serde::Deserialize;
-//!
-//! struct PickleReader<R>
-//! where
-//!     R: Read + Sized,
-//! {
-//!     de: Deserializer<R>,
-//! }
-//!
-//! impl<R: Read + Sized> PickleReader<R>
-//! {
-//!    fn new(reader: R) -> PickleReader<R> {
-//!        PickleReader {
-//!            de: Deserializer::new(reader, DeOptions::new()),
-//!        }
-//!    }
-//!
-//!    pub fn read_object<'de, T: Deserialize<'de>>(&mut self) -> Result<T> {
-//!        let value = Deserialize::deserialize(&mut self.de)?;
-//!        Ok(value)
-//!    }
-//! }
-//!
-//! let input = [0x80, 0x04, 0x95, 0x09, 0x00, 0x00, 0x00, 0x00,
-//!              0x00, 0x00, 0x00, 0x8c, 0x05, 0x48, 0x65, 0x6c,
-//!              0x6c, 0x6f, 0x94, 0x2e, 0x80, 0x04, 0x95, 0x0a,
-//!              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c,
-//!              0x06, 0x70, 0x69, 0x63, 0x6b, 0x6c, 0x65, 0x94,
-//!              0x2e, 0x00];
-//! let mut reader = PickleReader::new(std::io::Cursor::new(input));
-//! let string1: String = reader.read_object().unwrap();
-//! let string2: String = reader.read_object().unwrap();
-//! assert_eq!(&string1, "Hello");
-//! assert_eq!(&string2, "pickle");
-//! ```
 
 use std::io;
 use std::mem;
@@ -168,6 +124,59 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    /// Reset internal state, allowing reading multiple pickle dump calls from
+    /// a single stream.
+    ///
+    /// By default `(value_)from_reader` closes the input stream. It is possible
+    /// to deserialize multiple pickle objects from a single stream by
+    /// implementing a custom reader and resetting the internal state before 
+    /// reading the next value.
+    ///
+    /// # Example
+    ///
+    /// Using `reset_memo` inside a custom deserializer to deserialize multiple
+    /// objects from a single stream.
+    ///
+    /// ```
+    /// # use std::io::Read;
+    /// # use serde_pickle::{Deserializer, Result, DeOptions};
+    /// # use serde::Deserialize;
+    /// struct PickleReader<R: Read + Sized>
+    /// {
+    ///     de: Deserializer<R>,
+    /// }
+    ///
+    /// impl<R: Read + Sized> PickleReader<R>
+    /// {
+    ///    fn new(reader: R) -> PickleReader<R> {
+    ///        PickleReader {
+    ///            de: Deserializer::new(reader, DeOptions::new()),
+    ///        }
+    ///    }
+    ///
+    ///    pub fn read_object<'de, T: Deserialize<'de>>(&mut self) -> Result<T> {
+    ///        self.de.reset_memo();
+    ///        let value = Deserialize::deserialize(&mut self.de)?;
+    ///        Ok(value)
+    ///    }
+    /// }
+    ///
+    /// let input = [0x80, 0x04, 0x95, 0x09, 0x00, 0x00, 0x00, 0x00,
+    ///              0x00, 0x00, 0x00, 0x8c, 0x05, 0x48, 0x65, 0x6c,
+    ///              0x6c, 0x6f, 0x94, 0x2e, 0x80, 0x04, 0x95, 0x0a,
+    ///              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c,
+    ///              0x06, 0x70, 0x69, 0x63, 0x6b, 0x6c, 0x65, 0x94,
+    ///              0x2e, 0x00];
+    /// let mut reader = PickleReader::new(std::io::Cursor::new(input));
+    /// let string1: String = reader.read_object().unwrap();
+    /// let string2: String = reader.read_object().unwrap();
+    /// assert_eq!(&string1, "Hello");
+    /// assert_eq!(&string2, "pickle");
+    /// ```
+    pub fn reset_memo(&mut self) {
+        self.memo.clear();
+    }
+
     /// Decode a Value from this pickle.  This is different from going through
     /// the generic serde `deserialize`, since it preserves some types that are
     /// not in the serde data model, such as big integers.
@@ -188,10 +197,6 @@ impl<R: Read> Deserializer<R> {
     /// Parse a value from the underlying stream.  This will consume the whole
     /// pickle until the STOP opcode.
     fn parse_value(&mut self) -> Result<Value> {
-        // Clear memo, to allow reading multiple pickle dump calls to
-        // a single stream.
-        self.memo.clear();
-
         loop {
             match self.read_byte()? {
                 // Specials
