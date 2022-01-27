@@ -24,10 +24,6 @@ rand = "0.7"
 quickcheck = "0.9.0"
 criterion = "0.3.5"
 
-[features]
-# Benchmarking needs nightly.
-unstable = []
-
 [[bench]]
 name = "benchmark"
 harness = false
