@@ -1,3 +1,5 @@
+#![cfg(feature = "criterion-bench")]
+
 use byteorder::{LittleEndian, WriteBytesExt};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use serde_pickle;
