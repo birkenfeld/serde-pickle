@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 - May 2022
+
+- Speed up deserializing, and add more benchmarks (#21).
+
 ## 1.1 - Sep 2021
 
 - Add `Deserializer::reset_memo()` (#18).
