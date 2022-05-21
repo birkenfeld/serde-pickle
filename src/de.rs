@@ -207,7 +207,7 @@ impl<R: Read> Deserializer<R> {
                 }
                 FRAME => {
                     // We'll ignore framing. But we still have to gobble up the length.
-                    self.read_bytes(8)?;
+                    self.read_fixed_8_bytes()?;
                 }
                 STOP => return self.pop(),
                 MARK => {
@@ -235,7 +235,7 @@ impl<R: Read> Deserializer<R> {
                     self.memoize(memo_id.into())?;
                 }
                 LONG_BINPUT => {
-                    let bytes = self.read_bytes(4)?;
+                    let bytes = self.read_fixed_4_bytes()?;
                     let memo_id = LittleEndian::read_u32(&bytes);
                     self.memoize(memo_id)?;
                 }
@@ -255,7 +255,7 @@ impl<R: Read> Deserializer<R> {
                     self.push_memo_ref(memo_id.into())?;
                 }
                 LONG_BINGET => {
-                    let bytes = self.read_bytes(4)?;
+                    let bytes = self.read_fixed_4_bytes()?;
                     let memo_id = LittleEndian::read_u32(&bytes);
                     self.push_memo_ref(memo_id)?;
                 }
@@ -296,11 +296,11 @@ impl<R: Read> Deserializer<R> {
 
                 // Binary-coded numbers
                 BINFLOAT => {
-                    let bytes = self.read_bytes(8)?;
+                    let bytes = self.read_fixed_8_bytes()?;
                     self.stack.push(Value::F64(BigEndian::read_f64(&bytes)));
                 }
                 BININT => {
-                    let bytes = self.read_bytes(4)?;
+                    let bytes = self.read_fixed_4_bytes()?;
                     self.stack.push(Value::I64(LittleEndian::read_i32(&bytes).into()));
                 }
                 BININT1 => {
@@ -308,7 +308,7 @@ impl<R: Read> Deserializer<R> {
                     self.stack.push(Value::I64(byte.into()));
                 }
                 BININT2 => {
-                    let bytes = self.read_bytes(2)?;
+                    let bytes = self.read_fixed_2_bytes()?;
                     self.stack.push(Value::I64(LittleEndian::read_u16(&bytes).into()));
                 }
                 LONG1 => {
@@ -653,8 +653,53 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    #[inline]
+    fn read_fixed_2_bytes(&mut self) -> Result<[u8; 2]> {
+        let mut buf = [0; 2];
+        match self.rdr.by_ref().take(2).read_exact(&mut buf) {
+            Ok(()) => { self.pos += 2; Ok(buf) },
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                    self.error(ErrorCode::EOFWhileParsing)
+                } else {
+                    Err(Error::Io(err))
+                }
+            },
+        }
+    }
+
+    #[inline]
+    fn read_fixed_4_bytes(&mut self) -> Result<[u8; 4]> {
+        let mut buf = [0; 4];
+        match self.rdr.by_ref().take(4).read_exact(&mut buf) {
+            Ok(()) => { self.pos += 4; Ok(buf) },
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                    self.error(ErrorCode::EOFWhileParsing)
+                } else {
+                    Err(Error::Io(err))
+                }
+            },
+        }
+    }
+
+    #[inline]
+    fn read_fixed_8_bytes(&mut self) -> Result<[u8; 8]> {
+        let mut buf = [0; 8];
+        match self.rdr.by_ref().take(8).read_exact(&mut buf) {
+            Ok(()) => { self.pos += 8; Ok(buf) },
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                    self.error(ErrorCode::EOFWhileParsing)
+                } else {
+                    Err(Error::Io(err))
+                }
+            },
+        }
+    }
+
     fn read_i32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = self.read_bytes(4)?;
+        let lenbytes = self.read_fixed_4_bytes()?;
         match LittleEndian::read_i32(&lenbytes) {
             0          => Ok(vec![]),
             l if l < 0 => self.error(ErrorCode::NegativeLength),
@@ -663,12 +708,12 @@ impl<R: Read> Deserializer<R> {
     }
 
     fn read_u64_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = self.read_bytes(8)?;
+        let lenbytes = self.read_fixed_8_bytes()?;
         self.read_bytes(LittleEndian::read_u64(&lenbytes) as usize)
     }
 
     fn read_u32_prefixed_bytes(&mut self) -> Result<Vec<u8>> {
-        let lenbytes = self.read_bytes(4)?;
+        let lenbytes = self.read_fixed_4_bytes()?;
         self.read_bytes(LittleEndian::read_u32(&lenbytes) as usize)
     }
 
