@@ -40,6 +40,7 @@ enum Global {
     List,        // builtins/__builtin__.list
     Int,         // builtins/__builtin__.int
     Encode,      // _codecs.encode
+    DefaultDict, // collections.defaultdict
     Other,       // anything else (may be a classobj that is later discarded)
 }
 
@@ -926,6 +927,8 @@ impl<R: Read> Deserializer<R> {
                 Value::Global(Global::Bytearray),
             (b"__builtin__", b"int") | (b"builtins", b"int") =>
                 Value::Global(Global::Int),
+            (b"collections", b"defaultdict") =>
+                Value::Global(Global::DefaultDict),
             _ => Value::Global(Global::Other),
         };
         Ok(value)
@@ -1005,6 +1008,12 @@ impl<R: Read> Deserializer<R> {
                     }
                     _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
                 }
+            }
+            Value::Global(Global::DefaultDict) => {
+                // Return as if it was a regular dict.
+                // The default value for the defaultdict (in argtuple) is ignored.
+                self.stack.push(Value::Dict(vec![]));
+                Ok(())
             }
             Value::Global(Global::Other) => {
                 // Anything else; just keep it on the stack as an opaque object.
