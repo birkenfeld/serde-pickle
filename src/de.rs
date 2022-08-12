@@ -516,16 +516,18 @@ impl<R: Read> Deserializer<R> {
                     self.stack.push(Value::Object(vec![]));
                 }
                 BUILD => {
-                    // The top-of-stack for BUILD is used either as the instance __dict__,
-                    // or an argument for __setstate__, in which case it can be *any* type
-                    // of object.  In both cases, we just replace the standin.
-                    let state = self.pop()?;
-                    self.pop()?;  // remove the object standin
-                    // The intention is to have Value::Object be any "boring object", but
-                    // this is kind of ruined by the fact that state may just be a MemoRef.
-                    if let Value::Dict(dict) = state {
-                        self.stack.push(Value::Object(dict));
+                    let state = self.pop_resolve()?;
+                    // FIXME: I think a memoized instance should be mutated *in place*, not cloned?
+                    let instance = self.pop_resolve()?;
+
+                    if let Value::ExtObject(o) = instance {
+                        // instance is already an ExtObject, just overwrite .obj with state
+                        self.stack.push(Value::ExtObject(Box::new(ExtObject { obj: state, ext: o.ext })))
+                    } else if let Value::Dict(d) = state {
+                        // instance is nothing special and state is a plain obj, make a plain new Object
+                        self.stack.push(Value::Object(d));
                     } else {
+                        // state is not a plain dict, make a new ExtObject
                         self.stack.push(Value::ExtObject(Box::new(ExtObject { obj: state, ext: Value::None })))
                     }
                 }
