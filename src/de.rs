@@ -45,8 +45,8 @@ enum Global {
 
 #[derive(Clone, Debug, PartialEq)]
 struct ExtObject {
-    obj: Value,
-    ext: Value,
+    obj: Value,  // Dict of ordinary object data (but can be MemoRef, or anything if __getdata__ was used)
+    ext: Value,  // Dict/List/Set data if subclass of dict/list/set, or None otherwise
 }
 
 /// Our intermediate representation of a value.
@@ -62,8 +62,8 @@ struct ExtObject {
 enum Value {
     MemoRef(MemoId),
     Global(Global),
-    Object(Vec<(Value, Value)>),
-    ExtObject(Box<ExtObject>),
+    Object(Vec<(Value, Value)>), // Ordinary obj with attribute dict, eligible for promotion to ExtObject
+    ExtObject(Box<ExtObject>), // Object which does not have a dict as data, and/or was used with dict/list/set-specific data loading operations
     None,
     Bool(bool),
     I64(i64),
