@@ -517,18 +517,17 @@ impl<R: Read> Deserializer<R> {
                 }
                 BUILD => {
                     let state = self.pop_resolve()?;
-                    // FIXME: I think a memoized instance should be mutated *in place*, not cloned?
-                    let instance = self.pop_resolve()?;
+                    let top = self.top()?;
 
-                    if let Value::ExtObject(o) = instance {
+                    if let Value::ExtObject(ref mut o) = *top {
                         // instance is already an ExtObject, just overwrite .obj with state
-                        self.stack.push(Value::ExtObject(Box::new(ExtObject { obj: state, ext: o.ext })))
+                        o.obj = state;
                     } else if let Value::Dict(d) = state {
                         // instance is nothing special and state is a plain obj, make a plain new Object
-                        self.stack.push(Value::Object(d));
+                        *top = Value::Object(d);
                     } else {
                         // state is not a plain dict, make a new ExtObject
-                        self.stack.push(Value::ExtObject(Box::new(ExtObject { obj: state, ext: Value::None })))
+                        *top = Value::ExtObject(Box::new(ExtObject { obj: state, ext: Value::None }));
                     }
                 }
 
