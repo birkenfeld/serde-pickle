@@ -84,6 +84,7 @@ pub struct DeOptions {
     decode_strings: bool,
     replace_unresolved_globals: bool,
     replace_recursive: bool,
+    unwrap_subclassed_data_structures: bool,
 }
 
 impl DeOptions {
@@ -92,6 +93,7 @@ impl DeOptions {
     /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
     /// - don't replace unresolvable globals by `None`
     /// - don't replace recursive objects by `None`
+    /// - don't discard attributes of subclassed data structures such as dict or list (return them as a tuple (attributes, data))
     pub fn new() -> Self {
         Default::default()
     }
@@ -111,6 +113,12 @@ impl DeOptions {
     /// Activate replacing recursive objects by `None`
     pub fn replace_recursive(mut self) -> Self {
         self.replace_recursive = true;
+        self
+    }
+
+    /// Discard attributes of subclassed data structures such as dict or list, returning only the data
+    pub fn unwrap_subclassed_data_structures(mut self) -> Self {
+        self.unwrap_subclassed_data_structures = true;
         self
     }
 }
@@ -1140,7 +1148,17 @@ impl<R: Read> Deserializer<R> {
                 self.resolve_recursive(memo_id, (), |slf, (), value| slf.convert_value(value))
             },
             Value::ExtObject(obj) => {
-                Ok(value::Value::Tuple(vec![self.convert_value(obj.obj)?, self.convert_value(obj.ext)?]))
+                match obj.ext {
+                    Value::None => self.convert_value(obj.obj),  // it was a "plain" object after all
+                    ext => {
+                        // we actually have a subclassed data structure, either unwrap it or return a tuple
+                        if self.options.unwrap_subclassed_data_structures {
+                            self.convert_value(ext)
+                        } else {
+                            Ok(value::Value::Tuple(vec![self.convert_value(obj.obj)?, self.convert_value(ext)?]))
+                        }
+                    }
+                }
             }
             Value::Global(_) => {
                 if self.options.replace_unresolved_globals {
