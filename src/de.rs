@@ -437,11 +437,11 @@ impl<R: Read> Deserializer<R> {
                 SETITEM => {
                     let value = self.pop()?;
                     let key = self.pop()?;
-                    self.modify_dict(|dict| dict.push((key, value)), "SETITEM")?;
+                    self.modify_dict(|dict| dict.push((key, value)))?;
                 }
                 SETITEMS => {
                     let items = self.pop_mark()?;
-                    self.modify_dict(|dict| Self::extend_dict(dict, items), "SETITEMS")?;
+                    self.modify_dict(|dict| Self::extend_dict(dict, items))?;
                 }
 
                 // Sets and frozensets
@@ -933,7 +933,7 @@ impl<R: Read> Deserializer<R> {
     }
 
     // Modify the stack-top dict.
-    fn modify_dict<F>(&mut self, f: F, descr: &str) -> Result<()>
+    fn modify_dict<F>(&mut self, f: F) -> Result<()>
         where F: FnOnce(&mut Vec<(Value, Value)>)
     {
         let pos = self.pos;
