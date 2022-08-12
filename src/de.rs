@@ -83,6 +83,7 @@ enum Value {
 pub struct DeOptions {
     decode_strings: bool,
     replace_unresolved_globals: bool,
+    replace_recursive: bool,
 }
 
 impl DeOptions {
@@ -90,6 +91,7 @@ impl DeOptions {
     ///
     /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
     /// - don't replace unresolvable globals by `None`
+    /// - don't replace recursive objects by `None`
     pub fn new() -> Self {
         Default::default()
     }
@@ -106,6 +108,11 @@ impl DeOptions {
         self
     }
 
+    /// Activate replacing recursive objects by `None`
+    pub fn replace_recursive(mut self) -> Self {
+        self.replace_recursive = true;
+        self
+    }
 }
 
 /// Decodes pickle streams into values.
@@ -611,7 +618,13 @@ impl<R: Read> Deserializer<R> {
         // because our Values aren't references.
         let (value, mut count) = match self.memo.remove(&id) {
             Some(entry) => entry,
-            None => return Err(Error::Syntax(ErrorCode::Recursive)),
+            None => {
+                if self.options.replace_recursive {
+                    return f(self, u, Value::None)
+                } else {
+                    return Err(Error::Syntax(ErrorCode::Recursive))
+                }
+            }
         };
         count -= 1;
         if count <= 0 {
