@@ -1,0 +1,5 @@
+project: serde-pickle
+target: parsing
+
+cmds:
+  - cmd: /parsing
