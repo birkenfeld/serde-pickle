@@ -30,6 +30,8 @@ use super::error::{Error, ErrorCode, Result};
 use super::consts::*;
 use super::value;
 
+const MEMO_REF_COUNTING: bool = false;
+
 type MemoId = u32;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -551,7 +553,12 @@ impl<R: Read> Deserializer<R> {
     fn push_memo_ref(&mut self, memo_id: MemoId) -> Result<()> {
         self.stack.push(Value::MemoRef(memo_id));
         match self.memo.get_mut(&memo_id) {
-            Some(&mut (_, ref mut count)) => { *count += 1; Ok(()) }
+            Some(&mut (_, ref mut count)) => {
+                if MEMO_REF_COUNTING {
+                    *count += 1;
+                }
+                Ok(())
+            }
             None => Err(Error::Eval(ErrorCode::MissingMemo(memo_id), self.pos)),
         }
     }
@@ -577,10 +584,12 @@ impl<R: Read> Deserializer<R> {
         match maybe_memo {
             Some(Value::MemoRef(id)) => {
                 self.memo.get_mut(&id).map(|&mut (ref val, ref mut count)| {
-                    // We can't remove it from the memo here, since we haven't
-                    // decoded the whole stream yet and there may be further
-                    // references to the value.
-                    *count -= 1;
+                    if MEMO_REF_COUNTING {
+                        // We can't remove it from the memo here, since we haven't
+                        // decoded the whole stream yet and there may be further
+                        // references to the value.
+                        *count -= 1;
+                    }
                     val.clone()
                 })
             },
@@ -599,8 +608,10 @@ impl<R: Read> Deserializer<R> {
             Some(entry) => entry,
             None => return Err(Error::Syntax(ErrorCode::Recursive)),
         };
-        count -= 1;
-        if count <= 0 {
+        if MEMO_REF_COUNTING {
+            count -= 1;
+        }
+        if count <= 0 && MEMO_REF_COUNTING {
             f(self, u, value)
             // No need to put it back.
         } else {
