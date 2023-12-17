@@ -16,10 +16,13 @@ num-bigint = "0.4.0"
 num-traits = "0.2.10"
 iter-read = "0.3.0"
 criterion = { version = "0.3.5", optional = true }
+variantly = { version = "0.4", optional = true }
 
 [features]
-criterion-bench = [ "criterion" ]
+default = ["variantly"]
+variantly = ["dep:variantly"]
 
+criterion-bench = ["criterion"]
 # For the example binary and the test suite.
 [dev-dependencies]
 serde_derive = "1.0.104"
