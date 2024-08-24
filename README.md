@@ -19,13 +19,13 @@ This crate works with Cargo and can be found on
 ```toml
 [dependencies]
 serde = "1.0"
-serde-pickle = "1.0"
+serde-pickle = "1.1"
 ```
 
 Requirements
 ============
 
-Minimum supported Rust version is 1.41.1.
+Minimum supported Rust version is 1.58.1.
 
 Usage
 =====

@@ -1,6 +1,9 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
 
 jobs:
   test:
@@ -9,17 +12,15 @@ jobs:
     strategy:
       matrix:
         toolchain:
-          - 1.41.1
+          - 1.58.1
           - stable
           # - nightly
     steps:
-      - name: Checkout the source code
-        uses: actions/checkout@master
-      - name: Install Rust
-        run: |
-          rustup toolchain update --no-self-update ${{ matrix.toolchain }}
-          rustup default ${{ matrix.toolchain }}
-      - name: Build
-        run: cargo build --all
-      - name: Test
-        run: cargo test --all
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - run: cargo clippy --lib --examples --tests
+      - run: cargo build --lib --examples --tests
+      - run: cargo test
