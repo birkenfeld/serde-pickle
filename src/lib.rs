@@ -68,8 +68,6 @@
 //!
 //! The minimum supported version of the toolchain is 1.41.1.
 
-#![cfg_attr(feature = "unstable", feature(test))]
-
 pub use self::ser::{
     Serializer,
     SerOptions,

@@ -217,7 +217,7 @@ impl Deserializer {
 impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
     type Error = Error;
 
-    fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> Result<V::Value> {
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let value = match self.value.take() {
             Some(value) => value,
             None => { return Err(Error::Syntax(ErrorCode::EOFWhileParsing)); }
@@ -231,8 +231,8 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
                 if let Some(i) = v.to_i64() {
                     visitor.visit_i64(i)
                 } else {
-                    return Err(Error::Syntax(
-                        ErrorCode::InvalidValue("integer too large".into())));
+                    Err(Error::Syntax(
+                        ErrorCode::InvalidValue("integer too large".into())))
                 }
             },
             Value::F64(v) => visitor.visit_f64(v),
@@ -241,14 +241,14 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
             Value::List(v) => {
                 let len = v.len();
                 visitor.visit_seq(SeqDeserializer {
-                    de: &mut self,
+                    de: self,
                     iter: v.into_iter(),
                     len,
                 })
             },
             Value::Tuple(v) => {
                 visitor.visit_seq(SeqDeserializer {
-                    de: &mut self,
+                    de: self,
                     len: v.len(),
                     iter: v.into_iter(),
                 })
@@ -256,7 +256,7 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
             Value::Set(v) | Value::FrozenSet(v) => {
                 let v: Vec<_> = v.into_iter().map(HashableValue::into_value).collect();
                 visitor.visit_seq(SeqDeserializer {
-                    de: &mut self,
+                    de: self,
                     len: v.len(),
                     iter: v.into_iter(),
                 })
@@ -264,7 +264,7 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
             Value::Dict(v) => {
                 let len = v.len();
                 visitor.visit_map(MapDeserializer {
-                    de: &mut self,
+                    de: self,
                     iter: v.into_iter(),
                     value: None,
                     len,
@@ -412,7 +412,7 @@ impl<'de: 'a, 'a> de::MapAccess<'de> for MapDeserializer<'a> {
     fn next_value_seed<T: de::DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value> {
         let value = self.value.take().unwrap();
         self.de.value = Some(value);
-        Ok(seed.deserialize(&mut *self.de)?)
+        seed.deserialize(&mut *self.de)
     }
 
     fn size_hint(&self) -> Option<usize> {

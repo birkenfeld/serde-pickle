@@ -448,7 +448,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_i64(self, value: i64) -> Result<()> {
-        if -0x8000_0000 <= value && value < 0x8000_0000 {
+        if (-0x8000_0000..0x8000_0000).contains(&value) {
             self.write_opcode(BININT)?;
             self.writer.write_i32::<LittleEndian>(value as i32).map_err(From::from)
         } else {
@@ -619,7 +619,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         self.write_opcode(EMPTY_LIST)?;
         match len {
-            Some(len) if len == 0 => Ok(Compound { ser: self, state: None }),
+            Some(0) => Ok(Compound { ser: self, state: None }),
             _ => {
                 self.write_opcode(MARK)?;
                 Ok(Compound { ser: self, state: Some(0) })
@@ -660,7 +660,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.write_opcode(EMPTY_DICT)?;
         match len {
-            Some(len) if len == 0 => Ok(Compound { ser: self, state: None }),
+            Some(0) => Ok(Compound { ser: self, state: None }),
             _ => {
                 self.write_opcode(MARK)?;
                 Ok(Compound { ser: self, state: Some(0) })

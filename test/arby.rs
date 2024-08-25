@@ -6,7 +6,6 @@
 
 //! QuickCheck Arbitrary instance for Value, and associated helpers.
 
-use std::i64;
 use num_bigint::BigInt;
 use quickcheck::{Arbitrary, Gen, empty_shrinker};
 use rand::Rng;

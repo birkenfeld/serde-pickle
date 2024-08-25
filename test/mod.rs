@@ -238,7 +238,6 @@ mod value_tests {
     use num_bigint::BigInt;
     use rand::{RngCore, thread_rng};
     use quickcheck::{QuickCheck, StdGen};
-    use serde_json;
     use crate::{value_from_reader, value_to_vec, value_from_slice, to_vec, from_slice};
     use crate::{Value, HashableValue, SerOptions, DeOptions};
     use crate::Deserializer;
@@ -307,7 +306,7 @@ mod value_tests {
             let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
             match value_from_reader(file, Default::default()) {
                 Err(Error::Syntax(ErrorCode::Recursive)) => { }
-                _ => assert!(false, "wrong/no error returned for recursive structure")
+                _ => panic!("wrong/no error returned for recursive structure")
             }
         }
     }
