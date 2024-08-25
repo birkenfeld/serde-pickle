@@ -43,6 +43,12 @@ enum Global {
     Other,       // anything else (may be a classobj that is later discarded)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ExtObject {
+    obj: Value,  // Dict of ordinary object data (but can be MemoRef, or anything if __getdata__ was used)
+    ext: Value,  // Dict/List/Set data if subclass of dict/list/set, or None otherwise
+}
+
 /// Our intermediate representation of a value.
 ///
 /// The most striking difference to `value::Value` is that it contains a variant
@@ -56,6 +62,8 @@ enum Global {
 enum Value {
     MemoRef(MemoId),
     Global(Global),
+    Object(Vec<(Value, Value)>), // Ordinary obj with attribute dict, eligible for promotion to ExtObject
+    ExtObject(Box<ExtObject>), // Object which does not have a dict as data, and/or was used with dict/list/set-specific data loading operations
     None,
     Bool(bool),
     I64(i64),
@@ -75,6 +83,8 @@ enum Value {
 pub struct DeOptions {
     decode_strings: bool,
     replace_unresolved_globals: bool,
+    replace_recursive: bool,
+    unwrap_subclassed_data_structures: bool,
 }
 
 impl DeOptions {
@@ -82,6 +92,8 @@ impl DeOptions {
     ///
     /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
     /// - don't replace unresolvable globals by `None`
+    /// - don't replace recursive objects by `None`
+    /// - don't discard attributes of subclassed data structures such as dict or list (return them as a tuple (attributes, data))
     pub fn new() -> Self {
         Default::default()
     }
@@ -95,6 +107,18 @@ impl DeOptions {
     /// Activate replacing unresolved globals by `None`.
     pub fn replace_unresolved_globals(mut self) -> Self {
         self.replace_unresolved_globals = true;
+        self
+    }
+
+    /// Activate replacing recursive objects by `None`
+    pub fn replace_recursive(mut self) -> Self {
+        self.replace_recursive = true;
+        self
+    }
+
+    /// Discard attributes of subclassed data structures such as dict or list, returning only the data
+    pub fn unwrap_subclassed_data_structures(mut self) -> Self {
+        self.unwrap_subclassed_data_structures = true;
         self
     }
 }
@@ -468,37 +492,43 @@ impl<R: Read> Deserializer<R> {
                     }
                     // pop arguments to init
                     self.pop_mark()?;
-                    // push empty dictionary instead of the class instance
-                    self.stack.push(Value::Dict(Vec::new()));
+                    self.stack.push(Value::Object(vec![]));
                 }
                 OBJ => {
                     // pop arguments to init
                     self.pop_mark()?;
                     // pop class object
                     self.pop()?;
-                    self.stack.push(Value::Dict(Vec::new()));
+                    self.stack.push(Value::Object(vec![]));
                 }
                 NEWOBJ => {
                     // pop arguments and class object
                     for _ in 0..2 {
                         self.pop()?;
                     }
-                    self.stack.push(Value::Dict(Vec::new()));
+                    self.stack.push(Value::Object(vec![]));
                 }
                 NEWOBJ_EX => {
                     // pop keyword args, arguments and class object
                     for _ in 0..3 {
                         self.pop()?;
                     }
-                    self.stack.push(Value::Dict(Vec::new()));
+                    self.stack.push(Value::Object(vec![]));
                 }
                 BUILD => {
-                    // The top-of-stack for BUILD is used either as the instance __dict__,
-                    // or an argument for __setstate__, in which case it can be *any* type
-                    // of object.  In both cases, we just replace the standin.
-                    let state = self.pop()?;
-                    self.pop()?;  // remove the object standin
-                    self.stack.push(state);
+                    let state = self.pop_resolve()?;
+                    let top = self.top()?;
+
+                    if let Value::ExtObject(ref mut o) = *top {
+                        // instance is already an ExtObject, just overwrite .obj with state
+                        o.obj = state;
+                    } else if let Value::Dict(d) = state {
+                        // instance is nothing special and state is a plain obj, make a plain new Object
+                        *top = Value::Object(d);
+                    } else {
+                        // state is not a plain dict, make a new ExtObject
+                        *top = Value::ExtObject(Box::new(ExtObject { obj: state, ext: Value::None }));
+                    }
                 }
 
                 // Unsupported opcodes
@@ -597,7 +627,13 @@ impl<R: Read> Deserializer<R> {
         // because our Values aren't references.
         let (value, mut count) = match self.memo.remove(&id) {
             Some(entry) => entry,
-            None => return Err(Error::Syntax(ErrorCode::Recursive)),
+            None => {
+                if self.options.replace_recursive {
+                    return f(self, u, Value::None)
+                } else {
+                    return Err(Error::Syntax(ErrorCode::Recursive))
+                }
+            }
         };
         count -= 1;
         if count <= 0 {
@@ -864,7 +900,20 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<Value>)
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let mut top = self.top()?;
+
+        if let Value::Object(ref mut attr) = *top {
+            let attr = mem::replace(attr, vec![]);
+            *top = Value::ExtObject(Box::new(ExtObject { obj: Value::Dict(attr), ext: Value::List(vec![])}));
+        }
+
+        if let Value::ExtObject(ref mut obj) = *top {
+            top = &mut obj.ext;
+            if let Value::None = *top {
+                *top = Value::List(vec![]);
+            }
+        }
+
         if let Value::List(ref mut list) = *top {
             f(list);
             Ok(())
@@ -889,7 +938,20 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<(Value, Value)>)
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let mut top = self.top()?;
+
+        if let Value::Object(ref mut attr) = *top {
+            let attr = mem::replace(attr, vec![]);
+            *top = Value::ExtObject(Box::new(ExtObject { obj: Value::Dict(attr), ext: Value::Dict(vec![])}));
+        }
+
+        if let Value::ExtObject(ref mut obj) = *top {
+            top = &mut obj.ext;
+            if let Value::None = *top {
+                *top = Value::Dict(vec![]);
+            }
+        }
+
         if let Value::Dict(ref mut dict) = *top {
             f(dict);
             Ok(())
@@ -903,7 +965,21 @@ impl<R: Read> Deserializer<R> {
         where F: FnOnce(&mut Vec<Value>)
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let mut top = self.top()?;
+
+        if let Value::Object(ref mut attr) = *top {
+            let attr = mem::replace(attr, vec![]);
+            *top = Value::ExtObject(Box::new(ExtObject { obj: Value::Dict(attr), ext: Value::Set(vec![])}));
+        }
+
+        // TODO what about subclassed FrozenSet? How will that be handled?
+        if let Value::ExtObject(ref mut obj) = *top {
+            top = &mut obj.ext;
+            if let Value::None = *top {
+                *top = Value::Set(vec![]);
+            }
+        }
+
         if let Value::Set(ref mut set) = *top {
             f(set);
             Ok(())
@@ -1007,10 +1083,7 @@ impl<R: Read> Deserializer<R> {
                 }
             }
             Value::Global(Global::Other) => {
-                // Anything else; just keep it on the stack as an opaque object.
-                // If it is a class object, it will get replaced later when the
-                // class is instantiated.
-                self.stack.push(Value::Global(Global::Other));
+                self.stack.push(Value::Object(vec![]));
                 Ok(())
             }
             other => Self::stack_error("global reference", &other, self.pos),
@@ -1063,7 +1136,7 @@ impl<R: Read> Deserializer<R> {
                                        .collect::<Result<_>>();
                 Ok(value::Value::FrozenSet(new?))
             },
-            Value::Dict(v) => {
+            Value::Dict(v) | Value::Object(v) => {
                 let mut map = BTreeMap::new();
                 for (key, value) in v {
                     let real_key = self.convert_value(key).and_then(|rv| rv.into_hashable())?;
@@ -1075,6 +1148,19 @@ impl<R: Read> Deserializer<R> {
             Value::MemoRef(memo_id) => {
                 self.resolve_recursive(memo_id, (), |slf, (), value| slf.convert_value(value))
             },
+            Value::ExtObject(obj) => {
+                match obj.ext {
+                    Value::None => self.convert_value(obj.obj),  // it was a "plain" object after all
+                    ext => {
+                        // we actually have a subclassed data structure, either unwrap it or return a tuple
+                        if self.options.unwrap_subclassed_data_structures {
+                            self.convert_value(ext)
+                        } else {
+                            Ok(value::Value::Tuple(vec![self.convert_value(obj.obj)?, self.convert_value(ext)?]))
+                        }
+                    }
+                }
+            }
             Value::Global(_) => {
                 if self.options.replace_unresolved_globals {
                     Ok(value::Value::None)
@@ -1127,7 +1213,7 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
                     iter: v.into_iter(),
                 })
             },
-            Value::Dict(v) => {
+            Value::Dict(v) | Value::Object(v) => {
                 let len = v.len();
                 visitor.visit_map(MapAccess {
                     de: self,
@@ -1136,6 +1222,14 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
                     len,
                 })
             },
+            Value::ExtObject(obj) => {
+                let v = vec![obj.obj, obj.ext];
+                visitor.visit_seq(SeqAccess {
+                    len: v.len(),
+                    iter: v.into_iter(),
+                    de: &mut self,
+                })
+            }
             Value::MemoRef(memo_id) => {
                 self.resolve_recursive(memo_id, visitor, |slf, visitor, value| {
                     slf.value = Some(value);
