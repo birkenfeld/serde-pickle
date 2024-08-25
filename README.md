@@ -1,7 +1,7 @@
 Serde Pickle Serialization Library
 ==================================
 
-[![Build status](https://api.travis-ci.org/birkenfeld/serde-pickle.png)](https://travis-ci.org/birkenfeld/serde-pickle)
+[![Build Status](https://github.com/birkenfeld/serde-pickle/actions/workflows/main.yml/badge.svg)](https://github.com/birkenfeld/serde-pickle/actions/workflows/main.yml)
 [![Latest Version](https://img.shields.io/crates/v/serde-pickle.svg)](https://crates.io/crates/serde-pickle)
 
 [Documentation](https://docs.rs/serde-pickle)
