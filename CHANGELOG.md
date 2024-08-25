@@ -1,5 +1,11 @@
 # Changelog
 
+## unreleased
+
+- Add an option to replace recursive structures by `None` instead of
+  erroring (#25).
+- Require Rust 1.58.
+
 ## 1.1.1 - May 2022
 
 - Speed up deserializing, and add more benchmarks (#21).

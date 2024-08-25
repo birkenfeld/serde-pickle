@@ -308,6 +308,11 @@ mod value_tests {
                 Err(Error::Syntax(ErrorCode::Recursive)) => { }
                 _ => panic!("wrong/no error returned for recursive structure")
             }
+
+            let replace_opt = DeOptions::default().replace_recursive_structures();
+            let file = File::open(format!("test/data/test_recursive_proto{}.pickle", proto)).unwrap();
+            assert_eq!(value_from_reader(file, replace_opt).unwrap(),
+                       Value::List(vec![Value::Tuple(vec![Value::List(vec![Value::None])])]));
         }
     }
 

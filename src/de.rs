@@ -75,13 +75,15 @@ enum Value {
 pub struct DeOptions {
     decode_strings: bool,
     replace_unresolved_globals: bool,
+    replace_recursive_structures: bool,
 }
 
 impl DeOptions {
     /// Construct with default options:
     ///
     /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
-    /// - don't replace unresolvable globals by `None`
+    /// - don't replace unresolvable globals by `None`, but error out
+    /// - don't replace recursive structures by `None`, but error out
     pub fn new() -> Self {
         Default::default()
     }
@@ -95,6 +97,12 @@ impl DeOptions {
     /// Activate replacing unresolved globals by `None`.
     pub fn replace_unresolved_globals(mut self) -> Self {
         self.replace_unresolved_globals = true;
+        self
+    }
+
+    /// Activate replacing recursive structures by `None`.
+    pub fn replace_recursive_structures(mut self) -> Self {
+        self.replace_recursive_structures = true;
         self
     }
 }
@@ -597,7 +605,13 @@ impl<R: Read> Deserializer<R> {
         // because our Values aren't references.
         let (value, mut count) = match self.memo.remove(&id) {
             Some(entry) => entry,
-            None => return Err(Error::Syntax(ErrorCode::Recursive)),
+            None => return {
+                if self.options.replace_recursive_structures {
+                    f(self, u, Value::None)
+                } else {
+                    Err(Error::Syntax(ErrorCode::Recursive))
+                }
+            }
         };
         count -= 1;
         if count <= 0 {
