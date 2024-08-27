@@ -2,6 +2,9 @@
 
 ## unreleased
 
+- Add an option to keep "restore state" generated while pickling
+  arbitrary class instances, instead of replacing it with an empty dict
+  (#29).
 - Add an option to replace recursive structures by `None` instead of
   erroring (#25).
 - Require Rust 1.58.

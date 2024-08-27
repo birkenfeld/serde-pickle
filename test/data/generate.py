@@ -13,6 +13,12 @@ try:
     import cPickle as pickle
 except ImportError:
     import pickle
+try:
+    import typing
+    import dataclasses
+    py3 = True
+except ImportError:
+    py3 = False
 
 longish = 10000000000 * 10000000000  # > 64 bits
 
@@ -23,6 +29,16 @@ class Class(object):
 class ReduceClass(object):
     def __reduce__(self):
         return (ReduceClass, ())
+
+if py3:
+    class NamedTuple(typing.NamedTuple):
+        type: str
+        quantity: int
+
+    @dataclasses.dataclass
+    class DataClass:
+        type: str
+        quantity: int
 
 # A test object that generates all the types supported, with HashableValue
 # and normal Value variants.
@@ -42,8 +58,12 @@ test_object = {
         {},
         bytearray(b"\x00\x55\xaa\xff"),
     ],
-    7: Class()
+    7: Class(),
 }
+
+if py3:
+    test_object[8] = NamedTuple("abc", 10)
+    test_object[9] = DataClass(type="abcd", quantity=100)
 
 # Generate test file depending on protocol and Python major version.
 major = sys.version_info[0]

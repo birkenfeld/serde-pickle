@@ -33,8 +33,9 @@
 //! * Dictionaries (Rust `HashMap<Value, Value>`)
 //!
 //! When deserializing, arbitrary Python objects saved using a pickled instance
-//! dictionary or `__setstate__` are replaced by that state, since version
-//! 0.5 of this library.
+//! dictionary or `__setstate__` are replaced by that state, since version 0.5
+//! of this library.  More saved state is kept by enabling the
+//! `keep_restore_state` option in `DeOptions`, as of version 1.2.
 //!
 //! *Note on enums:* Enum variants are serialized as Python tuples `(name,
 //! [data])` instead of mappings (or a plain string for unit variants), which is

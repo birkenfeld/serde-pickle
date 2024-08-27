@@ -276,6 +276,8 @@ mod value_tests {
                 map.insert(hpyobj!(i=7), pyobj!(d={bb=b"attr" => i=5}));
             } else {
                 map.insert(hpyobj!(i=7), pyobj!(d={s="attr" => i=5}));
+                map.insert(hpyobj!(i=8), pyobj!(t=(s="abc", i=10)));
+                map.insert(hpyobj!(i=9), pyobj!(d={s="type" => s="abcd", s="quantity" => i=100}));
             },
             _ => unreachable!()
         }
@@ -287,7 +289,8 @@ mod value_tests {
         for &(major, proto) in TEST_CASES {
             let file = File::open(format!("test/data/tests_py{}_proto{}.pickle", major, proto)).unwrap();
             let comparison = get_test_object(major);
-            let unpickled = value_from_reader(file, Default::default()).unwrap();
+            let unpickled = value_from_reader(
+                file, DeOptions::default().keep_restore_state()).unwrap();
             assert_eq!(unpickled, comparison, "py {}, proto {}", major, proto);
         }
     }

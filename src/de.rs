@@ -40,6 +40,7 @@ enum Global {
     List,        // builtins/__builtin__.list
     Int,         // builtins/__builtin__.int
     Encode,      // _codecs.encode
+    Reconst,     // copy_reg._reconstructor
     Other,       // anything else (may be a classobj that is later discarded)
 }
 
@@ -74,6 +75,7 @@ enum Value {
 #[derive(Clone, Debug, Default)]
 pub struct DeOptions {
     decode_strings: bool,
+    keep_restore_state: bool,
     replace_unresolved_globals: bool,
     replace_recursive_structures: bool,
 }
@@ -82,6 +84,7 @@ impl DeOptions {
     /// Construct with default options:
     ///
     /// - don't decode strings saved as STRING opcodes (only protocols 0-2) as UTF-8
+    /// - don't keep restore state for unpickling class instances
     /// - don't replace unresolvable globals by `None`, but error out
     /// - don't replace recursive structures by `None`, but error out
     pub fn new() -> Self {
@@ -94,13 +97,20 @@ impl DeOptions {
         self
     }
 
-    /// Activate replacing unresolved globals by `None`.
+    /// Activate keeping "restore state" for unpickling class instances, instead
+    /// of replacing it by an empty dict.
+    pub fn keep_restore_state(mut self) -> Self {
+        self.keep_restore_state = true;
+        self
+    }
+
+    /// Activate replacing unresolved globals by `None`, instead of erroring out.
     pub fn replace_unresolved_globals(mut self) -> Self {
         self.replace_unresolved_globals = true;
         self
     }
 
-    /// Activate replacing recursive structures by `None`.
+    /// Activate replacing recursive structures by `None`, instead of erroring out.
     pub fn replace_recursive_structures(mut self) -> Self {
         self.replace_recursive_structures = true;
         self
@@ -475,30 +485,44 @@ impl<R: Read> Deserializer<R> {
                         self.read_line()?;
                     }
                     // pop arguments to init
-                    self.pop_mark()?;
-                    // push empty dictionary instead of the class instance
-                    self.stack.push(Value::Dict(Vec::new()));
+                    let args = self.pop_mark()?;
+                    if self.options.keep_restore_state {
+                        self.stack.push(Value::Tuple(args));
+                    } else {
+                        self.stack.push(Value::Dict(Vec::new()));
+                    }
                 }
                 OBJ => {
                     // pop arguments to init
-                    self.pop_mark()?;
+                    let args = self.pop_mark()?;
                     // pop class object
                     self.pop()?;
-                    self.stack.push(Value::Dict(Vec::new()));
+                    if self.options.keep_restore_state {
+                        self.stack.push(Value::Tuple(args));
+                    } else {
+                        self.stack.push(Value::Dict(Vec::new()));
+                    }
                 }
                 NEWOBJ => {
                     // pop arguments and class object
-                    for _ in 0..2 {
-                        self.pop()?;
+                    let args = self.pop()?;
+                    self.pop()?;
+                    if self.options.keep_restore_state {
+                        self.stack.push(args);
+                    } else {
+                        self.stack.push(Value::Dict(Vec::new()));
                     }
-                    self.stack.push(Value::Dict(Vec::new()));
                 }
                 NEWOBJ_EX => {
                     // pop keyword args, arguments and class object
-                    for _ in 0..3 {
-                        self.pop()?;
+                    let kwargs = self.pop()?;
+                    let args = self.pop()?;
+                    self.pop()?;
+                    if self.options.keep_restore_state {
+                        self.stack.push(Value::Tuple(vec![args, kwargs]));
+                    } else {
+                        self.stack.push(Value::Dict(Vec::new()));
                     }
-                    self.stack.push(Value::Dict(Vec::new()));
                 }
                 BUILD => {
                     // The top-of-stack for BUILD is used either as the instance __dict__,
@@ -928,8 +952,12 @@ impl<R: Read> Deserializer<R> {
 
     // Push the Value::Global referenced by modname and globname.
     fn decode_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<Value> {
+        println!("{:?}", std::str::from_utf8(&modname));
+        println!("{:?}", std::str::from_utf8(&globname));
         let value = match (&*modname, &*globname) {
             (b"_codecs", b"encode") => Value::Global(Global::Encode),
+            (b"copy_reg", b"_reconstructor") |
+            (b"copyreg", b"_reconstructor") => Value::Global(Global::Reconst),
             (b"__builtin__", b"set") | (b"builtins", b"set") =>
                 Value::Global(Global::Set),
             (b"__builtin__", b"frozenset") | (b"builtins", b"frozenset") =>
@@ -1019,6 +1047,20 @@ impl<R: Read> Deserializer<R> {
                     }
                     _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
                 }
+            }
+            Value::Global(Global::Reconst) => {
+                // Arguments are (class, base, state), we keep state if enabled,
+                // else push an empty dict (for compatibility with NEWOBJ below).
+                if self.options.keep_restore_state {
+                    let state = match self.resolve(argtuple.pop()) {
+                        Some(obj) => obj,
+                        None => Value::Dict(Vec::new()),
+                    };
+                    self.stack.push(state);
+                } else {
+                    self.stack.push(Value::Dict(Vec::new()));
+                }
+                Ok(())
             }
             Value::Global(Global::Other) => {
                 // Anything else; just keep it on the stack as an opaque object.
