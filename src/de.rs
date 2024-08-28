@@ -952,8 +952,6 @@ impl<R: Read> Deserializer<R> {
 
     // Push the Value::Global referenced by modname and globname.
     fn decode_global(&mut self, modname: Vec<u8>, globname: Vec<u8>) -> Result<Value> {
-        println!("{:?}", std::str::from_utf8(&modname));
-        println!("{:?}", std::str::from_utf8(&globname));
         let value = match (&*modname, &*globname) {
             (b"_codecs", b"encode") => Value::Global(Global::Encode),
             (b"copy_reg", b"_reconstructor") |
