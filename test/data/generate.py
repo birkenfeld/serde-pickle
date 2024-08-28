@@ -14,6 +14,7 @@ try:
 except ImportError:
     import pickle
 try:
+    import enum
     import typing
     import dataclasses
     py3 = True
@@ -31,6 +32,7 @@ class ReduceClass(object):
         return (ReduceClass, ())
 
 if py3:
+    exec('''if 1:
     class NamedTuple(typing.NamedTuple):
         type: str
         quantity: int
@@ -39,13 +41,27 @@ if py3:
     class DataClass:
         type: str
         quantity: int
+    ''')
+
+    class NormalEnum(enum.IntEnum):
+        val = 30
+
+    class ByValue:
+        """
+        Mixin for enums to pickle value instead of name (restores pre-3.11 behavior).
+        """
+        def __reduce_ex__(self, prot):
+            return self.__class__, (self._value_,)
+
+    class ByValueEnum(ByValue, enum.IntEnum):
+        val = 20
 
 # A test object that generates all the types supported, with HashableValue
 # and normal Value variants.
 test_object = {
     None: None,
     False: (False, True),
-    10: 100000,
+    1000: 100000,
     longish: longish,
     1.0: 1.0,
     b"bytes": b"bytes",
@@ -64,6 +80,8 @@ test_object = {
 if py3:
     test_object[8] = NamedTuple("abc", 10)
     test_object[9] = DataClass(type="abcd", quantity=100)
+    test_object[42] = NormalEnum.val
+    test_object[43] = ByValueEnum.val
 
 # Generate test file depending on protocol and Python major version.
 major = sys.version_info[0]

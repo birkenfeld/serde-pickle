@@ -550,8 +550,8 @@ impl<R: Read> Deserializer<R> {
     // Pop the stack top item, and resolve it if it is a memo reference.
     fn pop_resolve(&mut self) -> Result<Value> {
         let top = self.stack.pop();
-        match self.resolve(top) {
-            Some(v) => Ok(v),
+        match top {
+            Some(v) => self.resolve(v),
             None    => self.error(ErrorCode::StackUnderflow)
         }
     }
@@ -605,18 +605,19 @@ impl<R: Read> Deserializer<R> {
     }
 
     // Resolve memo reference during stream decoding.
-    fn resolve(&mut self, maybe_memo: Option<Value>) -> Option<Value> {
-        match maybe_memo {
-            Some(Value::MemoRef(id)) => {
-                self.memo.get_mut(&id).map(|&mut (ref val, ref mut count)| {
+    fn resolve(&mut self, memo: Value) -> Result<Value> {
+        match memo {
+            Value::MemoRef(id) => match self.memo.get_mut(&id) {
+                None => Err(Error::Eval(ErrorCode::MissingMemo(id), self.pos)),
+                Some(&mut (ref val, ref mut count)) => {
                     // We can't remove it from the memo here, since we haven't
                     // decoded the whole stream yet and there may be further
                     // references to the value.
                     *count -= 1;
-                    val.clone()
-                })
+                    Ok(val.clone())
+                }
             },
-            other => other
+            other => Ok(other)
         }
     }
 
@@ -975,7 +976,7 @@ impl<R: Read> Deserializer<R> {
     fn reduce_global(&mut self, global: Value, mut argtuple: Vec<Value>) -> Result<()> {
         match global {
             Value::Global(Global::Set) => {
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::List(items)) => {
                         self.stack.push(Value::Set(items));
                         Ok(())
@@ -984,7 +985,7 @@ impl<R: Read> Deserializer<R> {
                 }
             }
             Value::Global(Global::Frozenset) => {
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::List(items)) => {
                         self.stack.push(Value::FrozenSet(items));
                         Ok(())
@@ -995,7 +996,7 @@ impl<R: Read> Deserializer<R> {
             Value::Global(Global::Bytearray) => {
                 // On Py2, the call is encoded as bytearray(u"foo", "latin-1").
                 argtuple.truncate(1);
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::Bytes(bytes)) => {
                         self.stack.push(Value::Bytes(bytes));
                         Ok(())
@@ -1011,7 +1012,7 @@ impl<R: Read> Deserializer<R> {
                 }
             }
             Value::Global(Global::List) => {
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::List(items)) => {
                         self.stack.push(Value::List(items));
                         Ok(())
@@ -1020,7 +1021,7 @@ impl<R: Read> Deserializer<R> {
                 }
             }
             Value::Global(Global::Int) => {
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::Int(integer)) => {
                         self.stack.push(Value::Int(integer));
                         Ok(())
@@ -1030,11 +1031,12 @@ impl<R: Read> Deserializer<R> {
             }
             Value::Global(Global::Encode) => {
                 // Byte object encoded as _codecs.encode(x, 'latin1')
-                match self.resolve(argtuple.pop()) {  // Encoding, always latin1
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
+                    // Encoding, always latin1
                     Some(Value::String(_)) => { }
                     _ => return self.error(ErrorCode::InvalidValue("encode() arg".into())),
                 }
-                match self.resolve(argtuple.pop()) {
+                match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::String(s)) => {
                         // Now we have to convert the string to latin-1
                         // encoded bytes.  It never contains codepoints
@@ -1050,7 +1052,7 @@ impl<R: Read> Deserializer<R> {
                 // Arguments are (class, base, state), we keep state if enabled,
                 // else push an empty dict (for compatibility with NEWOBJ below).
                 if self.options.keep_restore_state {
-                    let state = match self.resolve(argtuple.pop()) {
+                    let state = match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                         Some(obj) => obj,
                         None => Value::Dict(Vec::new()),
                     };
@@ -1064,7 +1066,13 @@ impl<R: Read> Deserializer<R> {
                 // Anything else; just keep it on the stack as an opaque object.
                 // If it is a class object, it will get replaced later when the
                 // class is instantiated.
-                self.stack.push(Value::Global(Global::Other));
+                if self.options.keep_restore_state {
+                    let result: Result<_> = argtuple.into_iter()
+                        .map(|v| self.resolve(v)).collect();
+                    self.stack.push(Value::Tuple(result?));
+                } else {
+                    self.stack.push(Value::Global(Global::Other));
+                }
                 Ok(())
             }
             other => Self::stack_error("global reference", &other, self.pos),

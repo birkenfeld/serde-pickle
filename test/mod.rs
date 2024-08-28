@@ -255,7 +255,7 @@ mod value_tests {
         let mut obj = pyobj!(d={
             n=None           => n=None,
             b=False          => t=(b=False, b=True),
-            i=10             => i=100000,
+            i=1000           => i=100000,
             ii=longish       => ii=longish,
             f=1.0            => f=1.0,
             bb=b"bytes"      => bb=b"bytes",
@@ -278,6 +278,8 @@ mod value_tests {
                 map.insert(hpyobj!(i=7), pyobj!(d={s="attr" => i=5}));
                 map.insert(hpyobj!(i=8), pyobj!(t=(s="abc", i=10)));
                 map.insert(hpyobj!(i=9), pyobj!(d={s="type" => s="abcd", s="quantity" => i=100}));
+                map.insert(hpyobj!(i=42), pyobj!(t=(i=30)));
+                map.insert(hpyobj!(i=43), pyobj!(t=(i=20)));
             },
             _ => unreachable!()
         }
