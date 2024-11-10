@@ -12,7 +12,7 @@ use std::error;
 use std::result;
 use serde::{ser, de};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ErrorCode {
     /// Unsupported opcode
     Unsupported(char),
