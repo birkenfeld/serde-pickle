@@ -7,7 +7,7 @@
   (#29).
 - Add an option to replace recursive structures by `None` instead of
   erroring (#25).
-- Require Rust 1.58.
+- Require Rust 1.63.
 
 ## 1.1.1 - May 2022
 
