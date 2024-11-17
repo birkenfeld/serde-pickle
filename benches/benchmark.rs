@@ -170,11 +170,8 @@ fn bench_picklefile(c: &mut Criterion, filename: &str) {
     // Run the benchmark
     c.bench_function(filename, |b| {
         b.iter(|| {
-            serde_pickle::de::value_from_slice(
-                black_box(&contents),
-                serde_pickle::de::DeOptions::new(),
-            )
-            .unwrap()
+            serde_pickle::de::value_from_slice(black_box(&contents), serde_pickle::de::DeOptions::new())
+                .unwrap()
         })
     });
 }

@@ -6,18 +6,18 @@
 
 //! Serializer/Deserializer implementations for `value::Value`.
 
-use std::fmt;
-use std::vec;
-use std::result::Result as StdResult;
-use std::collections::{btree_map, BTreeMap};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use serde::{ser, de, forward_to_deserialize_any};
-use serde::ser::Serialize;
 use serde::de::Visitor;
+use serde::ser::Serialize;
+use serde::{de, forward_to_deserialize_any, ser};
+use std::collections::{btree_map, BTreeMap};
+use std::fmt;
+use std::result::Result as StdResult;
+use std::vec;
 
-use crate::value::{Value, HashableValue};
 use crate::error::{Error, ErrorCode, Result};
+use crate::value::{HashableValue, Value};
 
 impl<'de> de::Deserialize<'de> for Value {
     #[inline]
@@ -208,9 +208,7 @@ pub struct Deserializer {
 impl Deserializer {
     /// Creates a new deserializer instance for deserializing the specified JSON value.
     pub fn new(value: Value) -> Deserializer {
-        Deserializer {
-            value: Some(value),
-        }
+        Deserializer { value: Some(value) }
     }
 }
 
@@ -220,7 +218,9 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let value = match self.value.take() {
             Some(value) => value,
-            None => { return Err(Error::Syntax(ErrorCode::EOFWhileParsing)); }
+            None => {
+                return Err(Error::Syntax(ErrorCode::EOFWhileParsing));
+            }
         };
 
         match value {
@@ -231,45 +231,27 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
                 if let Some(i) = v.to_i64() {
                     visitor.visit_i64(i)
                 } else {
-                    Err(Error::Syntax(
-                        ErrorCode::InvalidValue("integer too large".into())))
+                    Err(Error::Syntax(ErrorCode::InvalidValue("integer too large".into())))
                 }
-            },
+            }
             Value::F64(v) => visitor.visit_f64(v),
             Value::Bytes(v) => visitor.visit_byte_buf(v),
             Value::String(v) => visitor.visit_string(v),
             Value::List(v) => {
                 let len = v.len();
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    iter: v.into_iter(),
-                    len,
-                })
-            },
+                visitor.visit_seq(SeqDeserializer { de: self, iter: v.into_iter(), len })
+            }
             Value::Tuple(v) => {
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    len: v.len(),
-                    iter: v.into_iter(),
-                })
+                visitor.visit_seq(SeqDeserializer { de: self, len: v.len(), iter: v.into_iter() })
             }
             Value::Set(v) | Value::FrozenSet(v) => {
                 let v: Vec<_> = v.into_iter().map(HashableValue::into_value).collect();
-                visitor.visit_seq(SeqDeserializer {
-                    de: self,
-                    len: v.len(),
-                    iter: v.into_iter(),
-                })
-            },
+                visitor.visit_seq(SeqDeserializer { de: self, len: v.len(), iter: v.into_iter() })
+            }
             Value::Dict(v) => {
                 let len = v.len();
-                visitor.visit_map(MapDeserializer {
-                    de: self,
-                    iter: v.into_iter(),
-                    value: None,
-                    len,
-                })
-            },
+                visitor.visit_map(MapDeserializer { de: self, iter: v.into_iter(), value: None, len })
+            }
         }
     }
 
@@ -283,13 +265,16 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
     }
 
     #[inline]
-    fn deserialize_newtype_struct<V: Visitor<'de>>(self, _name: &'static str, visitor: V) -> Result<V::Value> {
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self, _name: &'static str, visitor: V,
+    ) -> Result<V::Value> {
         visitor.visit_newtype_struct(self)
     }
 
     #[inline]
-    fn deserialize_enum<V: Visitor<'de>>(self, _name: &'static str, _variants: &'static [&'static str],
-                                         visitor: V) -> Result<V::Value> {
+    fn deserialize_enum<V: Visitor<'de>>(
+        self, _name: &'static str, _variants: &'static [&'static str], visitor: V,
+    ) -> Result<V::Value> {
         visitor.visit_enum(self)
     }
 
@@ -321,8 +306,9 @@ impl<'de: 'a, 'a> de::EnumAccess<'de> for &'a mut Deserializer {
             }
             Some(Value::Dict(v)) => {
                 if v.len() != 1 {
-                    Err(Error::Syntax(ErrorCode::Structure("enum variants must \
-                                                            have one dict entry".into())))
+                    Err(Error::Syntax(ErrorCode::Structure(
+                        "enum variants must have one dict entry".into(),
+                    )))
                 } else {
                     let (name, args) = v.into_iter().next().unwrap();
                     self.value = Some(name.into_value());
@@ -336,8 +322,9 @@ impl<'de: 'a, 'a> de::EnumAccess<'de> for &'a mut Deserializer {
                 let val = seed.deserialize(&mut *self)?;
                 Ok((val, self))
             }
-            _ => Err(Error::Syntax(ErrorCode::Structure("enums must be represented as \
-                                                         dicts or tuples".into())))
+            _ => Err(Error::Syntax(ErrorCode::Structure(
+                "enums must be represented as dicts or tuples".into(),
+            ))),
         }
     }
 }
@@ -357,7 +344,9 @@ impl<'de: 'a, 'a> de::VariantAccess<'de> for &'a mut Deserializer {
         de::Deserializer::deserialize_any(self, visitor)
     }
 
-    fn struct_variant<V: Visitor<'de>>(self, _fields: &'static [&'static str], visitor: V) -> Result<V::Value> {
+    fn struct_variant<V: Visitor<'de>>(
+        self, _fields: &'static [&'static str], visitor: V,
+    ) -> Result<V::Value> {
         de::Deserializer::deserialize_any(self, visitor)
     }
 }
@@ -419,7 +408,6 @@ impl<'de: 'a, 'a> de::MapAccess<'de> for MapDeserializer<'a> {
         Some(self.len)
     }
 }
-
 
 /// Create a `serde::Serializer` that serializes a `Serialize`e into a `Value`.
 pub struct Serializer;
@@ -672,20 +660,23 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     #[inline]
-    fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str)
-                              -> Result<Value> {
+    fn serialize_unit_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str,
+    ) -> Result<Value> {
         Ok(Value::String(variant.into()))
     }
 
     #[inline]
-    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _name: &'static str, value: &T)
-                                                       -> Result<Value> {
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self, _name: &'static str, value: &T,
+    ) -> Result<Value> {
         value.serialize(self)
     }
 
     #[inline]
-    fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str, _variant_index: u32,
-                                                        variant: &'static str, value: &T) -> Result<Value> {
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, value: &T,
+    ) -> Result<Value> {
         let mut d = BTreeMap::new();
         d.insert(HashableValue::String(variant.into()), to_value(&value)?);
         Ok(Value::Dict(d))
@@ -712,14 +703,14 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     #[inline]
-    fn serialize_tuple_struct(self, _name: &'static str, len: usize)
-                              -> Result<Self::SerializeTupleStruct> {
+    fn serialize_tuple_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
         self.serialize_tuple(len)
     }
 
     #[inline]
-    fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
-                               len: usize) -> Result<Self::SerializeTupleVariant> {
+    fn serialize_tuple_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, len: usize,
+    ) -> Result<Self::SerializeTupleVariant> {
         Ok(SerializeTupleVariant { ser: self, variant, state: Vec::with_capacity(len) })
     }
 
@@ -729,18 +720,17 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     #[inline]
-    fn serialize_struct(self, _name: &'static str, _len: usize)
-                        -> Result<Self::SerializeStruct> {
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
         Ok(SerializeMap { ser: self, variant: "", key: None, state: BTreeMap::new() })
     }
 
     #[inline]
-    fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
-                                _len: usize) -> Result<Self::SerializeStructVariant> {
+    fn serialize_struct_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, _len: usize,
+    ) -> Result<Self::SerializeStructVariant> {
         Ok(SerializeMap { ser: self, variant, key: None, state: BTreeMap::new() })
     }
 }
-
 
 /// Serialize any serde serializable object into a `value::Value`.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<Value> {

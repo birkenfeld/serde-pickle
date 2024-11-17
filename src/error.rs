@@ -6,11 +6,11 @@
 
 //! Error objects and codes
 
+use serde::{de, ser};
+use std::error;
 use std::fmt;
 use std::io;
-use std::error;
 use std::result;
-use serde::{ser, de};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ErrorCode {
@@ -54,17 +54,22 @@ impl fmt::Display for ErrorCode {
             ErrorCode::StackUnderflow => write!(fmt, "pickle stack underflow"),
             ErrorCode::NegativeLength => write!(fmt, "negative length prefix"),
             ErrorCode::StringNotUTF8 => write!(fmt, "string is not UTF-8 encoded"),
-            ErrorCode::InvalidStackTop(what, ref it) =>
-                write!(fmt, "invalid stack top, expected {}, got {}", what, it),
+            ErrorCode::InvalidStackTop(what, ref it) => {
+                write!(fmt, "invalid stack top, expected {}, got {}", what, it)
+            }
             ErrorCode::ValueNotHashable => write!(fmt, "dict key or set item not hashable"),
             ErrorCode::Recursive => write!(fmt, "recursive structure found"),
             ErrorCode::UnresolvedGlobal => write!(fmt, "unresolved global reference"),
-            ErrorCode::UnsupportedGlobal(ref m, ref g) =>
-                write!(fmt, "unsupported global: {}.{}",
-                       String::from_utf8_lossy(m), String::from_utf8_lossy(g)),
+            ErrorCode::UnsupportedGlobal(ref m, ref g) => write!(
+                fmt,
+                "unsupported global: {}.{}",
+                String::from_utf8_lossy(m),
+                String::from_utf8_lossy(g)
+            ),
             ErrorCode::MissingMemo(n) => write!(fmt, "missing memo with id {}", n),
-            ErrorCode::InvalidLiteral(ref l) =>
-                write!(fmt, "literal is invalid: {}", String::from_utf8_lossy(l)),
+            ErrorCode::InvalidLiteral(ref l) => {
+                write!(fmt, "literal is invalid: {}", String::from_utf8_lossy(l))
+            }
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),
             ErrorCode::InvalidValue(ref s) => write!(fmt, "invalid value: {}", s),
             ErrorCode::Structure(ref s) => fmt.write_str(s),
@@ -96,9 +101,8 @@ impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::Io(ref error) => error.fmt(fmt),
-            Error::Eval(ref code, offset) => write!(fmt, "eval error at offset {}: {}",
-                                                    offset, code),
-            Error::Syntax(ref code) => write!(fmt, "decoding error: {}", code)
+            Error::Eval(ref code, offset) => write!(fmt, "eval error at offset {}: {}", offset, code),
+            Error::Syntax(ref code) => write!(fmt, "decoding error: {}", code),
         }
     }
 }

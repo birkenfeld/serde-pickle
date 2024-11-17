@@ -39,15 +39,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         "decode" => {
             let decoded: pickle::Value = pickle::value_from_reader(reader, Default::default())?;
             println!("{:#?}", decoded);
-        },
+        }
         "transcode" => {
             let decoded: pickle::Value = pickle::value_from_reader(reader, Default::default())?;
             pickle::value_to_writer(&mut stdout(), &decoded, Default::default())?;
-        },
+        }
         "to_json" => {
             let decoded: json::Value = pickle::from_reader(reader, Default::default())?;
             println!("{:#?}", decoded);
-        },
+        }
         "from_json" => {
             let decoded: json::Value = json::from_reader(reader)?;
             pickle::to_writer(&mut stdout(), &decoded, pickle::SerOptions::new().proto_v2())?;

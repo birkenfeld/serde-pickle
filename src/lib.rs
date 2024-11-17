@@ -69,40 +69,22 @@
 //!
 //! The minimum supported version of the toolchain is 1.41.1.
 
-pub use self::ser::{
-    Serializer,
-    SerOptions,
-    to_writer,
-    to_vec,
-    value_to_writer,
-    value_to_vec,
-};
+pub use self::ser::{to_vec, to_writer, value_to_vec, value_to_writer, SerOptions, Serializer};
 
 pub use self::de::{
+    from_iter, from_reader, from_slice, value_from_iter, value_from_reader, value_from_slice, DeOptions,
     Deserializer,
-    DeOptions,
-    from_reader,
-    from_slice,
-    from_iter,
-    value_from_reader,
-    value_from_slice,
-    value_from_iter,
 };
 
-pub use self::value::{
-    Value,
-    HashableValue,
-    to_value,
-    from_value,
-};
+pub use self::value::{from_value, to_value, HashableValue, Value};
 
 pub use self::error::{Error, ErrorCode, Result};
 
-pub mod ser;
+mod consts;
 pub mod de;
 pub mod error;
+pub mod ser;
 pub mod value;
-mod consts;
 mod value_impls;
 
 #[cfg(test)]

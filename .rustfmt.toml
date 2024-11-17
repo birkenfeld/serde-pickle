@@ -1,0 +1,6 @@
+chain_width = 80
+fn_call_width = 80
+fn_args_layout = "Compressed"
+max_width = 110
+single_line_if_else_max_width = 80
+struct_lit_width = 80

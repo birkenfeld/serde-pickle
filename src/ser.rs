@@ -6,17 +6,17 @@
 
 //! Pickle serialization
 
-use std::io;
-use std::collections::BTreeSet;
-use serde::ser;
-use serde::ser::Serialize;
-use byteorder::{LittleEndian, BigEndian, WriteBytesExt};
+use byteorder::{BigEndian, LittleEndian, WriteBytesExt};
 use num_bigint::BigInt;
 use num_traits::Signed;
+use serde::ser;
+use serde::ser::Serialize;
+use std::collections::BTreeSet;
+use std::io;
 
 use super::consts::*;
 use super::error::{Error, Result};
-use super::value::{Value, HashableValue};
+use super::value::{HashableValue, Value};
 
 /// Supported pickle protocols for writing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,16 +103,17 @@ impl<W: io::Write> Serializer<W> {
         use serde::Serializer;
         match *value {
             // Cases covered by the Serializer trait
-            HashableValue::None    => self.serialize_unit(),
+            HashableValue::None => self.serialize_unit(),
             HashableValue::Bool(b) => self.serialize_bool(b),
-            HashableValue::I64(i)  => self.serialize_i64(i),
-            HashableValue::F64(f)  => self.serialize_f64(f),
+            HashableValue::I64(i) => self.serialize_i64(i),
+            HashableValue::F64(f) => self.serialize_f64(f),
             HashableValue::Bytes(ref b) => self.serialize_bytes(b),
             HashableValue::String(ref s) => self.serialize_str(s),
             HashableValue::Int(ref i) => self.serialize_bigint(i),
             HashableValue::FrozenSet(ref s) => self.serialize_set(s, b"frozenset"),
-            HashableValue::Tuple(ref t) =>
-                self.serialize_tuplevalue(t, |slf, v| slf.serialize_hashable_value(v)),
+            HashableValue::Tuple(ref t) => {
+                self.serialize_tuplevalue(t, |slf, v| slf.serialize_hashable_value(v))
+            }
         }
     }
 
@@ -120,10 +121,10 @@ impl<W: io::Write> Serializer<W> {
         use serde::Serializer;
         match *value {
             // Cases covered by the Serializer trait
-            Value::None    => self.serialize_unit(),
+            Value::None => self.serialize_unit(),
             Value::Bool(b) => self.serialize_bool(b),
-            Value::I64(i)  => self.serialize_i64(i),
-            Value::F64(f)  => self.serialize_f64(f),
+            Value::I64(i) => self.serialize_i64(i),
+            Value::F64(f) => self.serialize_f64(f),
             Value::Bytes(ref b) => self.serialize_bytes(b),
             Value::String(ref s) => self.serialize_str(s),
             Value::List(ref l) => {
@@ -136,7 +137,7 @@ impl<W: io::Write> Serializer<W> {
                     self.write_opcode(APPENDS)?;
                 }
                 Ok(())
-            },
+            }
             Value::Dict(ref d) => {
                 self.write_opcode(EMPTY_DICT)?;
                 self.write_opcode(MARK)?;
@@ -153,18 +154,10 @@ impl<W: io::Write> Serializer<W> {
             }
 
             // Others
-            Value::Int(ref i) => {
-                self.serialize_bigint(i)
-            }
-            Value::Tuple(ref t) => {
-                self.serialize_tuplevalue(t, |slf, v| slf.serialize_value(v))
-            },
-            Value::Set(ref s) => {
-                self.serialize_set(s, b"set")
-            },
-            Value::FrozenSet(ref s) => {
-                self.serialize_set(s, b"frozenset")
-            }
+            Value::Int(ref i) => self.serialize_bigint(i),
+            Value::Tuple(ref t) => self.serialize_tuplevalue(t, |slf, v| slf.serialize_value(v)),
+            Value::Set(ref s) => self.serialize_set(s, b"set"),
+            Value::FrozenSet(ref s) => self.serialize_set(s, b"frozenset"),
         }
     }
 
@@ -198,7 +191,8 @@ impl<W: io::Write> Serializer<W> {
     }
 
     fn serialize_tuplevalue<T, F>(&mut self, t: &[T], f: F) -> Result<()>
-        where F: Fn(&mut Self, &T) -> Result<()>
+    where
+        F: Fn(&mut Self, &T) -> Result<()>,
     {
         if t.is_empty() {
             self.write_opcode(EMPTY_TUPLE)
@@ -515,7 +509,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_char(self, value: char) -> Result<()> {
-        let mut string = String::with_capacity(4);  // longest utf-8 encoding
+        let mut string = String::with_capacity(4); // longest utf-8 encoding
         string.push(value);
         self.serialize_str(&string)
     }
@@ -574,8 +568,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str)
-                              -> Result<()> {
+    fn serialize_unit_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str,
+    ) -> Result<()> {
         self.serialize_str(variant)?;
         if self.options.compat_enum_repr {
             self.write_opcode(TUPLE1)
@@ -590,9 +585,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _name: &'static str,
-                                                        _variant_index: u32, variant: &'static str,
-                                                        value: &T) -> Result<()> {
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, value: &T,
+    ) -> Result<()> {
         if self.options.compat_enum_repr {
             self.serialize_str(variant)?;
             value.serialize(&mut *self)?;
@@ -639,14 +634,14 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_tuple_struct(self, _name: &'static str, len: usize)
-                              -> Result<Self::SerializeTupleStruct> {
+    fn serialize_tuple_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
         self.serialize_tuple(len)
     }
 
     #[inline]
-    fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
-                               _len: usize) -> Result<Self::SerializeTupleVariant> {
+    fn serialize_tuple_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, _len: usize,
+    ) -> Result<Self::SerializeTupleVariant> {
         if !self.options.compat_enum_repr {
             self.write_opcode(EMPTY_DICT)?;
         }
@@ -674,8 +669,9 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, variant: &'static str,
-                                len: usize) -> Result<Self::SerializeStructVariant> {
+    fn serialize_struct_variant(
+        self, _name: &'static str, _variant_index: u32, variant: &'static str, len: usize,
+    ) -> Result<Self::SerializeStructVariant> {
         if !self.options.compat_enum_repr {
             self.write_opcode(EMPTY_DICT)?;
         }
@@ -685,7 +681,8 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 }
 
 fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, options: SerOptions) -> Result<()>
-    where F: FnOnce(&mut Serializer<W>) -> Result<()>
+where
+    F: FnOnce(&mut Serializer<W>) -> Result<()>,
 {
     writer.write_all(&[PROTO])?;
     if options.proto == PickleProto::V3 {
@@ -699,17 +696,14 @@ fn wrap_write<W: io::Write, F>(mut writer: W, inner: F, options: SerOptions) -> 
     writer.write_all(&[STOP]).map_err(From::from)
 }
 
-
 /// Encode the value into a pickle stream.
-pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, options: SerOptions)
-                                     -> Result<()> {
+pub fn value_to_writer<W: io::Write>(writer: &mut W, value: &Value, options: SerOptions) -> Result<()> {
     wrap_write(writer, |ser| ser.serialize_value(value), options)
 }
 
 /// Encode the specified struct into a `[u8]` writer.
 #[inline]
-pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, options: SerOptions)
-                                             -> Result<()> {
+pub fn to_writer<W: io::Write, T: Serialize>(writer: &mut W, value: &T, options: SerOptions) -> Result<()> {
     wrap_write(writer, |ser| value.serialize(ser), options)
 }
 
