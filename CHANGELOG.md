@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## 1.2 - Nov 2024
 
 - Add an option to keep "restore state" generated while pickling
   arbitrary class instances, instead of replacing it with an empty dict
