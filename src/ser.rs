@@ -407,6 +407,10 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     type SerializeStruct = Self::SerializeMap;
     type SerializeStructVariant = Self::SerializeMap;
 
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
     #[inline]
     fn serialize_bool(self, value: bool) -> Result<()> {
         self.write_opcode(if value { NEWTRUE } else { NEWFALSE })

@@ -1171,6 +1171,10 @@ impl<R: Read> Deserializer<R> {
 impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     type Error = Error;
 
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let value = self.get_next_value()?;
         match value {

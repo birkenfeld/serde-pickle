@@ -215,6 +215,10 @@ impl Deserializer {
 impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
     type Error = Error;
 
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let value = match self.value.take() {
             Some(value) => value,
@@ -572,6 +576,10 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     type SerializeMap = SerializeMap<'a>;
     type SerializeStruct = Self::SerializeMap;
     type SerializeStructVariant = Self::SerializeMap;
+
+    fn is_human_readable(&self) -> bool {
+        false
+    }
 
     #[inline]
     fn serialize_bool(self, value: bool) -> Result<Value> {
