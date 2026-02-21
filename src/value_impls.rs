@@ -252,6 +252,8 @@ impl<'de: 'a, 'a> de::Deserializer<'de> for &'a mut Deserializer {
                 let len = v.len();
                 visitor.visit_map(MapDeserializer { de: self, iter: v.into_iter(), value: None, len })
             }
+
+            Value::Call(..) | Value::Global(..) => visitor.visit_unit(),
         }
     }
 

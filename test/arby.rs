@@ -103,6 +103,7 @@ impl Arbitrary for Value {
             Value::Set(ref v) => Box::new(Arbitrary::shrink(v).map(Value::Set)),
             Value::FrozenSet(ref v) => Box::new(Arbitrary::shrink(v).map(Value::FrozenSet)),
             Value::Dict(ref v) => Box::new(Arbitrary::shrink(v).map(Value::Dict)),
+            _ => todo!(),
         }
     }
 }

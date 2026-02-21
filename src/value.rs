@@ -10,11 +10,29 @@ use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::fmt::{self, Debug};
 
 pub use crate::value_impls::{from_value, to_value};
 
 use crate::error::{Error, ErrorCode};
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Global {
+    pub modname: String,
+    pub globname: String,
+}
+
+impl Debug for Global {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "global({self})")
+    }
+}
+
+impl fmt::Display for Global {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{}", self.modname, self.globname)
+    }
+}
 
 /// Represents all primitive builtin Python values that can be restored by
 /// unpickling.
@@ -50,6 +68,10 @@ pub enum Value {
     FrozenSet(BTreeSet<HashableValue>),
     /// Dictionary (map)
     Dict(BTreeMap<HashableValue, Value>),
+    /// Global (imported) name
+    Global(Global),
+    /// Call with arguments and state
+    Call(Global, Vec<Value>, Vec<Value>),
 }
 
 /// Represents all primitive builtin Python values that can be contained
@@ -174,6 +196,9 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+
+            Value::Global(ref global) => write!(f, "{}", global.to_string()),
+            Value::Call(ref global, _, _) => write!(f, "{}", global.to_string()),
         }
     }
 }
