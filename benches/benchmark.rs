@@ -120,8 +120,9 @@ fn unpickle_nested_list_no_memo(c: &mut Criterion) {
     }
     buffer.push(b'.');
 
+    // 201 levels is more than the default limit.
     c.bench_function("unpickle_nested_list_no_memo", |b| {
-        b.iter(|| value_from_slice(&buffer, Default::default()).unwrap());
+        b.iter(|| value_from_slice(&buffer, DeOptions::new().max_depth(201)).unwrap());
     });
 }
 
