@@ -44,6 +44,8 @@ pub enum ErrorCode {
     InvalidValue(String),
     /// Structure deserialization error (e.g., unknown variant)
     Structure(String),
+    /// Lists, tuples, sets or dicts nested deeper than `DeOptions::max_depth`
+    NestingTooDeep,
 }
 
 impl fmt::Display for ErrorCode {
@@ -73,6 +75,7 @@ impl fmt::Display for ErrorCode {
             ErrorCode::TrailingBytes => write!(fmt, "trailing bytes found"),
             ErrorCode::InvalidValue(ref s) => write!(fmt, "invalid value: {}", s),
             ErrorCode::Structure(ref s) => fmt.write_str(s),
+            ErrorCode::NestingTooDeep => write!(fmt, "nesting too deep"),
         }
     }
 }

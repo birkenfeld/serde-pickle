@@ -32,6 +32,9 @@ use super::value;
 
 type MemoId = u32;
 
+/// Default limit for the nesting depth of lists, tuples, sets and dicts.
+const DEFAULT_MAX_DEPTH: usize = 128;
+
 #[derive(Clone, Debug, PartialEq)]
 enum Global {
     Set,       // builtins/__builtin__.set
@@ -72,12 +75,25 @@ enum Value {
 }
 
 /// Options for deserializing.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DeOptions {
     decode_strings: bool,
     keep_restore_state: bool,
     replace_unresolved_globals: bool,
     replace_recursive_structures: bool,
+    max_depth: usize,
+}
+
+impl Default for DeOptions {
+    fn default() -> Self {
+        DeOptions {
+            decode_strings: false,
+            keep_restore_state: false,
+            replace_unresolved_globals: false,
+            replace_recursive_structures: false,
+            max_depth: DEFAULT_MAX_DEPTH,
+        }
+    }
 }
 
 impl DeOptions {
@@ -87,6 +103,7 @@ impl DeOptions {
     /// - don't keep restore state for unpickling class instances
     /// - don't replace unresolvable globals by `None`, but error out
     /// - don't replace recursive structures by `None`, but error out
+    /// - allow lists, tuples, sets and dicts to nest at most 128 levels deep
     pub fn new() -> Self {
         Default::default()
     }
@@ -115,6 +132,17 @@ impl DeOptions {
         self.replace_recursive_structures = true;
         self
     }
+
+    /// Set how deeply lists, tuples, sets and dicts may be nested (default
+    /// 128).  Deeper input fails with `ErrorCode::NestingTooDeep`.
+    ///
+    /// Each level takes stack space while decoding, more in debug builds and
+    /// for large target types, so a much higher limit may also need a thread
+    /// with a bigger stack.
+    pub fn max_depth(mut self, depth: usize) -> Self {
+        self.max_depth = depth;
+        self
+    }
 }
 
 /// Decodes pickle streams into values.
@@ -122,10 +150,12 @@ pub struct Deserializer<R: Read> {
     rdr: BufReader<R>,
     options: DeOptions,
     pos: usize,
-    value: Option<Value>,                 // next value to deserialize
-    memo: BTreeMap<MemoId, (Value, i32)>, // pickle memo (value, number of refs)
-    stack: Vec<Value>,                    // topmost items on the stack
-    stacks: Vec<Vec<Value>>,              // items further down the stack, between MARKs
+    value: Option<Value>,                      // next value to deserialize
+    memo: BTreeMap<MemoId, (Value, i32, u32)>, // pickle memo (value, number of refs, depth)
+    stack: Vec<Value>,                         // topmost items on the stack
+    stacks: Vec<Vec<Value>>,                   // items further down the stack, between MARKs
+    depths: Vec<u32>,                          // nesting depths of the items in stacks and stack
+    depth: usize,                              // nesting depth while converting values
 }
 
 impl<R: Read> Deserializer<R> {
@@ -138,6 +168,8 @@ impl<R: Read> Deserializer<R> {
             memo: BTreeMap::new(),
             stack: Vec::with_capacity(128),
             stacks: Vec::with_capacity(16),
+            depths: Vec::with_capacity(128),
+            depth: 0,
             options,
         }
     }
@@ -243,8 +275,9 @@ impl<R: Read> Deserializer<R> {
                     self.pop_mark()?;
                 }
                 DUP => {
-                    let top = self.top()?.clone();
-                    self.stack.push(top);
+                    let (top, depth) = self.top()?;
+                    let (top, depth) = (top.clone(), *depth);
+                    self.push_nested(top, depth);
                 }
 
                 // Memo saving ops
@@ -284,174 +317,176 @@ impl<R: Read> Deserializer<R> {
                 }
 
                 // Singletons
-                NONE => self.stack.push(Value::None),
-                NEWFALSE => self.stack.push(Value::Bool(false)),
-                NEWTRUE => self.stack.push(Value::Bool(true)),
+                NONE => self.push(Value::None),
+                NEWFALSE => self.push(Value::Bool(false)),
+                NEWTRUE => self.push(Value::Bool(true)),
 
                 // ASCII-formatted numbers
                 INT => {
                     let line = self.read_line()?;
                     let val = self.decode_text_int(line)?;
-                    self.stack.push(val);
+                    self.push(val);
                 }
                 LONG => {
                     let line = self.read_line()?;
                     let long = self.decode_text_long(line)?;
-                    self.stack.push(long);
+                    self.push(long);
                 }
                 FLOAT => {
                     let line = self.read_line()?;
                     let f = self.parse_ascii(line)?;
-                    self.stack.push(Value::F64(f));
+                    self.push(Value::F64(f));
                 }
 
                 // ASCII-formatted strings
                 STRING => {
                     let line = self.read_line()?;
                     let string = self.decode_escaped_string(&line)?;
-                    self.stack.push(string);
+                    self.push(string);
                 }
                 UNICODE => {
                     let line = self.read_line()?;
                     let string = self.decode_escaped_unicode(&line)?;
-                    self.stack.push(string);
+                    self.push(string);
                 }
 
                 // Binary-coded numbers
                 BINFLOAT => {
                     let bytes = self.read_fixed_8_bytes()?;
-                    self.stack.push(Value::F64(BigEndian::read_f64(&bytes)));
+                    self.push(Value::F64(BigEndian::read_f64(&bytes)));
                 }
                 BININT => {
                     let bytes = self.read_fixed_4_bytes()?;
-                    self.stack.push(Value::I64(LittleEndian::read_i32(&bytes).into()));
+                    self.push(Value::I64(LittleEndian::read_i32(&bytes).into()));
                 }
                 BININT1 => {
                     let byte = self.read_byte()?;
-                    self.stack.push(Value::I64(byte.into()));
+                    self.push(Value::I64(byte.into()));
                 }
                 BININT2 => {
                     let bytes = self.read_fixed_2_bytes()?;
-                    self.stack.push(Value::I64(LittleEndian::read_u16(&bytes).into()));
+                    self.push(Value::I64(LittleEndian::read_u16(&bytes).into()));
                 }
                 LONG1 => {
                     let bytes = self.read_u8_prefixed_bytes()?;
                     let long = self.decode_binary_long(bytes);
-                    self.stack.push(long);
+                    self.push(long);
                 }
                 LONG4 => {
                     let bytes = self.read_i32_prefixed_bytes()?;
                     let long = self.decode_binary_long(bytes);
-                    self.stack.push(long);
+                    self.push(long);
                 }
 
                 // Length-prefixed (byte)strings
                 SHORT_BINBYTES => {
                     let string = self.read_u8_prefixed_bytes()?;
-                    self.stack.push(Value::Bytes(string));
+                    self.push(Value::Bytes(string));
                 }
                 BINBYTES => {
                     let string = self.read_u32_prefixed_bytes()?;
-                    self.stack.push(Value::Bytes(string));
+                    self.push(Value::Bytes(string));
                 }
                 BINBYTES8 => {
                     let string = self.read_u64_prefixed_bytes()?;
-                    self.stack.push(Value::Bytes(string));
+                    self.push(Value::Bytes(string));
                 }
                 SHORT_BINSTRING => {
                     let string = self.read_u8_prefixed_bytes()?;
                     let decoded = self.decode_string(string)?;
-                    self.stack.push(decoded);
+                    self.push(decoded);
                 }
                 BINSTRING => {
                     let string = self.read_i32_prefixed_bytes()?;
                     let decoded = self.decode_string(string)?;
-                    self.stack.push(decoded);
+                    self.push(decoded);
                 }
                 SHORT_BINUNICODE => {
                     let string = self.read_u8_prefixed_bytes()?;
                     let decoded = self.decode_unicode(string)?;
-                    self.stack.push(decoded);
+                    self.push(decoded);
                 }
                 BINUNICODE => {
                     let string = self.read_u32_prefixed_bytes()?;
                     let decoded = self.decode_unicode(string)?;
-                    self.stack.push(decoded);
+                    self.push(decoded);
                 }
                 BINUNICODE8 => {
                     let string = self.read_u64_prefixed_bytes()?;
                     let decoded = self.decode_unicode(string)?;
-                    self.stack.push(decoded);
+                    self.push(decoded);
                 }
                 BYTEARRAY8 => {
                     let string = self.read_u64_prefixed_bytes()?;
-                    self.stack.push(Value::Bytes(string));
+                    self.push(Value::Bytes(string));
                 }
 
                 // Tuples
-                EMPTY_TUPLE => self.stack.push(Value::Tuple(Vec::new())),
+                EMPTY_TUPLE => self.push_nested(Value::Tuple(Vec::new()), 1),
                 TUPLE1 => {
-                    let item = self.pop()?;
-                    self.stack.push(Value::Tuple(vec![item]));
+                    let (item, depth) = self.pop_nested()?;
+                    self.push_container(Value::Tuple, vec![item], depth)?;
                 }
                 TUPLE2 => {
-                    let item2 = self.pop()?;
-                    let item1 = self.pop()?;
-                    self.stack.push(Value::Tuple(vec![item1, item2]));
+                    let (item2, depth2) = self.pop_nested()?;
+                    let (item1, depth1) = self.pop_nested()?;
+                    self.push_container(Value::Tuple, vec![item1, item2], depth1.max(depth2))?;
                 }
                 TUPLE3 => {
-                    let item3 = self.pop()?;
-                    let item2 = self.pop()?;
-                    let item1 = self.pop()?;
-                    self.stack.push(Value::Tuple(vec![item1, item2, item3]));
+                    let (item3, depth3) = self.pop_nested()?;
+                    let (item2, depth2) = self.pop_nested()?;
+                    let (item1, depth1) = self.pop_nested()?;
+                    let depth = depth1.max(depth2).max(depth3);
+                    self.push_container(Value::Tuple, vec![item1, item2, item3], depth)?;
                 }
                 TUPLE => {
-                    let items = self.pop_mark()?;
-                    self.stack.push(Value::Tuple(items));
+                    let (items, depth) = self.pop_mark()?;
+                    self.push_container(Value::Tuple, items, depth)?;
                 }
 
                 // Lists
-                EMPTY_LIST => self.stack.push(Value::List(Vec::new())),
+                EMPTY_LIST => self.push_nested(Value::List(Vec::new()), 1),
                 LIST => {
-                    let items = self.pop_mark()?;
-                    self.stack.push(Value::List(items));
+                    let (items, depth) = self.pop_mark()?;
+                    self.push_container(Value::List, items, depth)?;
                 }
                 APPEND => {
-                    let value = self.pop()?;
-                    self.modify_list(|list| list.push(value))?;
+                    let (value, depth) = self.pop_nested()?;
+                    self.modify_list(depth, |list| list.push(value))?;
                 }
                 APPENDS => {
-                    let items = self.pop_mark()?;
-                    self.modify_list(|list| list.extend(items))?;
+                    let (items, depth) = self.pop_mark()?;
+                    self.modify_list(depth, |list| list.extend(items))?;
                 }
 
                 // Dicts
-                EMPTY_DICT => self.stack.push(Value::Dict(Vec::new())),
+                EMPTY_DICT => self.push_nested(Value::Dict(Vec::new()), 1),
                 DICT => {
-                    let items = self.pop_mark()?;
+                    let (items, depth) = self.pop_mark()?;
+                    let depth = self.container_depth(depth)?;
                     let mut dict = Vec::with_capacity(items.len() / 2);
                     Self::extend_dict(&mut dict, items);
-                    self.stack.push(Value::Dict(dict));
+                    self.push_nested(Value::Dict(dict), depth);
                 }
                 SETITEM => {
-                    let value = self.pop()?;
-                    let key = self.pop()?;
-                    self.modify_dict(|dict| dict.push((key, value)))?;
+                    let (value, value_depth) = self.pop_nested()?;
+                    let (key, key_depth) = self.pop_nested()?;
+                    self.modify_dict(key_depth.max(value_depth), |dict| dict.push((key, value)))?;
                 }
                 SETITEMS => {
-                    let items = self.pop_mark()?;
-                    self.modify_dict(|dict| Self::extend_dict(dict, items))?;
+                    let (items, depth) = self.pop_mark()?;
+                    self.modify_dict(depth, |dict| Self::extend_dict(dict, items))?;
                 }
 
                 // Sets and frozensets
-                EMPTY_SET => self.stack.push(Value::Set(Vec::new())),
+                EMPTY_SET => self.push_nested(Value::Set(Vec::new()), 1),
                 FROZENSET => {
-                    let items = self.pop_mark()?;
-                    self.stack.push(Value::FrozenSet(items));
+                    let (items, depth) = self.pop_mark()?;
+                    self.push_container(Value::FrozenSet, items, depth)?;
                 }
                 ADDITEMS => {
-                    let items = self.pop_mark()?;
-                    self.modify_set(|set| set.extend(items))?;
+                    let (items, depth) = self.pop_mark()?;
+                    self.modify_set(depth, |set| set.extend(items))?;
                 }
 
                 // Arbitrary module globals, used here for unpickling set and frozenset
@@ -460,7 +495,7 @@ impl<R: Read> Deserializer<R> {
                     let modname = self.read_line()?;
                     let globname = self.read_line()?;
                     let value = self.decode_global(modname, globname)?;
-                    self.stack.push(value);
+                    self.push(value);
                 }
                 STACK_GLOBAL => {
                     let globname = match self.pop_resolve()? {
@@ -472,15 +507,17 @@ impl<R: Read> Deserializer<R> {
                         other => return Self::stack_error("string", &other, self.pos),
                     };
                     let value = self.decode_global(modname, globname)?;
-                    self.stack.push(value);
+                    self.push(value);
                 }
                 REDUCE => {
-                    let argtuple = match self.pop_resolve()? {
-                        Value::Tuple(args) => args,
-                        other => return Self::stack_error("tuple", &other, self.pos),
+                    let (argtuple, depth) = self.pop_nested()?;
+                    let (argtuple, depth) = match self.resolve_nested(argtuple, depth)? {
+                        (Value::Tuple(args), depth) => (args, depth),
+                        (other, _) => return Self::stack_error("tuple", &other, self.pos),
                     };
                     let global = self.pop_resolve()?;
-                    self.reduce_global(global, argtuple)?;
+                    // The arguments are nested one level less deep than their tuple.
+                    self.reduce_global(global, argtuple, depth.saturating_sub(1))?;
                 }
 
                 // Arbitrary classes - make a best effort attempt to recover some data
@@ -490,52 +527,53 @@ impl<R: Read> Deserializer<R> {
                         self.read_line()?;
                     }
                     // pop arguments to init
-                    let args = self.pop_mark()?;
+                    let (args, depth) = self.pop_mark()?;
                     if self.options.keep_restore_state {
-                        self.stack.push(Value::Tuple(args));
+                        self.push_container(Value::Tuple, args, depth)?;
                     } else {
-                        self.stack.push(Value::Dict(Vec::new()));
+                        self.push_nested(Value::Dict(Vec::new()), 1);
                     }
                 }
                 OBJ => {
                     // pop arguments to init
-                    let args = self.pop_mark()?;
+                    let (args, depth) = self.pop_mark()?;
                     // pop class object
                     self.pop()?;
                     if self.options.keep_restore_state {
-                        self.stack.push(Value::Tuple(args));
+                        self.push_container(Value::Tuple, args, depth)?;
                     } else {
-                        self.stack.push(Value::Dict(Vec::new()));
+                        self.push_nested(Value::Dict(Vec::new()), 1);
                     }
                 }
                 NEWOBJ => {
                     // pop arguments and class object
-                    let args = self.pop()?;
+                    let (args, depth) = self.pop_nested()?;
                     self.pop()?;
                     if self.options.keep_restore_state {
-                        self.stack.push(args);
+                        self.push_nested(args, depth);
                     } else {
-                        self.stack.push(Value::Dict(Vec::new()));
+                        self.push_nested(Value::Dict(Vec::new()), 1);
                     }
                 }
                 NEWOBJ_EX => {
                     // pop keyword args, arguments and class object
-                    let kwargs = self.pop()?;
-                    let args = self.pop()?;
+                    let (kwargs, kwargs_depth) = self.pop_nested()?;
+                    let (args, args_depth) = self.pop_nested()?;
                     self.pop()?;
                     if self.options.keep_restore_state {
-                        self.stack.push(Value::Tuple(vec![args, kwargs]));
+                        let depth = args_depth.max(kwargs_depth);
+                        self.push_container(Value::Tuple, vec![args, kwargs], depth)?;
                     } else {
-                        self.stack.push(Value::Dict(Vec::new()));
+                        self.push_nested(Value::Dict(Vec::new()), 1);
                     }
                 }
                 BUILD => {
                     // The top-of-stack for BUILD is used either as the instance __dict__,
                     // or an argument for __setstate__, in which case it can be *any* type
                     // of object.  In both cases, we just replace the standin.
-                    let state = self.pop()?;
+                    let (state, depth) = self.pop_nested()?;
                     self.pop()?; // remove the object standin
-                    self.stack.push(state);
+                    self.push_nested(state, depth);
                 }
 
                 // Unsupported opcodes
@@ -544,52 +582,80 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    // Push a value that is not nested, such as a number, a string or a memo
+    // reference.
+    fn push(&mut self, value: Value) {
+        self.push_nested(value, 0);
+    }
+
+    // Push a value that is nested the given number of levels deep.
+    fn push_nested(&mut self, value: Value, depth: u32) {
+        self.stack.push(value);
+        self.depths.push(depth);
+    }
+
+    // Push a new container with the given items, the deepest of which is
+    // nested `depth` levels deep, if that is allowed.
+    fn push_container(&mut self, make: fn(Vec<Value>) -> Value, items: Vec<Value>, depth: u32) -> Result<()> {
+        let depth = self.container_depth(depth)?;
+        self.push_nested(make(items), depth);
+        Ok(())
+    }
+
     // Pop the stack top item.
     fn pop(&mut self) -> Result<Value> {
+        self.pop_nested().map(|(value, _)| value)
+    }
+
+    // Pop the stack top item and its depth.
+    fn pop_nested(&mut self) -> Result<(Value, u32)> {
         match self.stack.pop() {
-            Some(v) => Ok(v),
+            Some(v) => Ok((v, self.depths.pop().unwrap_or(0))),
             None => self.error(ErrorCode::StackUnderflow),
         }
     }
 
     // Pop the stack top item, and resolve it if it is a memo reference.
     fn pop_resolve(&mut self) -> Result<Value> {
-        let top = self.stack.pop();
-        match top {
-            Some(v) => self.resolve(v),
-            None => self.error(ErrorCode::StackUnderflow),
-        }
+        let top = self.pop()?;
+        self.resolve(top)
     }
 
-    // Pop all topmost stack items until the next MARK.
-    fn pop_mark(&mut self) -> Result<Vec<Value>> {
+    // Pop all topmost stack items until the next MARK, and the depth of the
+    // deepest of them.
+    fn pop_mark(&mut self) -> Result<(Vec<Value>, u32)> {
         match self.stacks.pop() {
-            Some(new) => Ok(mem::replace(&mut self.stack, new)),
+            Some(new) => {
+                let items = mem::replace(&mut self.stack, new);
+                let start = self.depths.len().saturating_sub(items.len());
+                let depth = self.depths.drain(start..).max().unwrap_or(0);
+                Ok((items, depth))
+            }
             None => self.error(ErrorCode::StackUnderflow),
         }
     }
 
-    // Mutably view the stack top item.
-    fn top(&mut self) -> Result<&mut Value> {
-        match self.stack.last_mut() {
+    // Mutably view the stack top item and its depth.
+    fn top(&mut self) -> Result<(&mut Value, &mut u32)> {
+        match (self.stack.last_mut(), self.depths.last_mut()) {
             // Since some operations like APPEND do things to the stack top, we
             // need to provide the reference to the "real" object here, not the
             // MemoRef variant.
-            Some(&mut Value::MemoRef(n)) => self
+            (Some(&mut Value::MemoRef(n)), _) => self
                 .memo
                 .get_mut(&n)
-                .map(|&mut (ref mut v, _)| v)
+                .map(|&mut (ref mut v, _, ref mut depth)| (v, depth))
                 .ok_or(Error::Syntax(ErrorCode::MissingMemo(n))),
-            Some(other_value) => Ok(other_value),
-            None => Err(Error::Eval(ErrorCode::StackUnderflow, self.pos)),
+            (Some(other_value), Some(depth)) => Ok((other_value, depth)),
+            _ => Err(Error::Eval(ErrorCode::StackUnderflow, self.pos)),
         }
     }
 
     // Pushes a memo reference on the stack, and increases the usage counter.
     fn push_memo_ref(&mut self, memo_id: MemoId) -> Result<()> {
-        self.stack.push(Value::MemoRef(memo_id));
+        self.push(Value::MemoRef(memo_id));
         match self.memo.get_mut(&memo_id) {
-            Some(&mut (_, ref mut count)) => {
+            Some(&mut (_, ref mut count, _)) => {
                 *count += 1;
                 Ok(())
             }
@@ -600,16 +666,16 @@ impl<R: Read> Deserializer<R> {
     // Memoize the current stack top with the given ID.  Moves the actual
     // object into the memo, and saves a reference on the stack instead.
     fn memoize(&mut self, memo_id: MemoId) -> Result<()> {
-        let mut item = self.pop()?;
+        let (mut item, mut depth) = self.pop_nested()?;
         if let Value::MemoRef(id) = item {
             // TODO: is this even possible?
-            item = match self.memo.get(&id) {
-                Some((v, _)) => v.clone(),
+            (item, depth) = match self.memo.get(&id) {
+                Some((v, _, depth)) => (v.clone(), *depth),
                 None => return Err(Error::Eval(ErrorCode::MissingMemo(id), self.pos)),
             };
         }
-        self.memo.insert(memo_id, (item, 1));
-        self.stack.push(Value::MemoRef(memo_id));
+        self.memo.insert(memo_id, (item, 1, depth));
+        self.push(Value::MemoRef(memo_id));
         Ok(())
     }
 
@@ -618,7 +684,7 @@ impl<R: Read> Deserializer<R> {
         match memo {
             Value::MemoRef(id) => match self.memo.get_mut(&id) {
                 None => Err(Error::Eval(ErrorCode::MissingMemo(id), self.pos)),
-                Some(&mut (ref val, ref mut count)) => {
+                Some(&mut (ref val, ref mut count, _)) => {
                     // We can't remove it from the memo here, since we haven't
                     // decoded the whole stream yet and there may be further
                     // references to the value.
@@ -630,6 +696,16 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    // Like resolve, but also return the depth of the value, which is the
+    // given one unless it is a memo reference.
+    fn resolve_nested(&mut self, value: Value, depth: u32) -> Result<(Value, u32)> {
+        let depth = match value {
+            Value::MemoRef(id) => self.memo.get(&id).map_or(depth, |&(_, _, depth)| depth),
+            _ => depth,
+        };
+        Ok((self.resolve(value)?, depth))
+    }
+
     // Resolve memo reference during Value deserializing.
     fn resolve_recursive<T, U, F>(&mut self, id: MemoId, u: U, f: F) -> Result<T>
     where
@@ -638,7 +714,7 @@ impl<R: Read> Deserializer<R> {
         // Take the value from the memo while visiting it.  This prevents us
         // from trying to depickle recursive structures, which we can't do
         // because our Values aren't references.
-        let (value, mut count) = match self.memo.remove(&id) {
+        let (value, mut count, depth) = match self.memo.remove(&id) {
             Some(entry) => entry,
             None => {
                 return {
@@ -656,7 +732,7 @@ impl<R: Read> Deserializer<R> {
             // No need to put it back.
         } else {
             let result = f(self, u, value.clone());
-            self.memo.insert(id, (value, count));
+            self.memo.insert(id, (value, count, depth));
             result
         }
     }
@@ -928,14 +1004,27 @@ impl<R: Read> Deserializer<R> {
         Value::Int(val)
     }
 
-    // Modify the stack-top list.
-    fn modify_list<F>(&mut self, f: F) -> Result<()>
+    // Depth of a container whose deepest item has the given depth, if allowed.
+    // One level more than max_depth is allowed here, for the tuple that passes
+    // the arguments to REDUCE, as in set([...]); converting checks the limit.
+    fn container_depth(&self, depth: u32) -> Result<u32> {
+        if depth as usize <= self.options.max_depth {
+            Ok(depth.saturating_add(1))
+        } else {
+            self.error(ErrorCode::NestingTooDeep)
+        }
+    }
+
+    // Modify the stack-top list, adding items of the given depth.
+    fn modify_list<F>(&mut self, depth: u32, f: F) -> Result<()>
     where
         F: FnOnce(&mut Vec<Value>),
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let depth = self.container_depth(depth)?;
+        let (top, top_depth) = self.top()?;
         if let Value::List(ref mut list) = *top {
+            *top_depth = depth.max(*top_depth);
             f(list);
             Ok(())
         } else {
@@ -954,14 +1043,16 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
-    // Modify the stack-top dict.
-    fn modify_dict<F>(&mut self, f: F) -> Result<()>
+    // Modify the stack-top dict, adding items of the given depth.
+    fn modify_dict<F>(&mut self, depth: u32, f: F) -> Result<()>
     where
         F: FnOnce(&mut Vec<(Value, Value)>),
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let depth = self.container_depth(depth)?;
+        let (top, top_depth) = self.top()?;
         if let Value::Dict(ref mut dict) = *top {
+            *top_depth = depth.max(*top_depth);
             f(dict);
             Ok(())
         } else {
@@ -969,14 +1060,16 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
-    // Modify the stack-top set.
-    fn modify_set<F>(&mut self, f: F) -> Result<()>
+    // Modify the stack-top set, adding items of the given depth.
+    fn modify_set<F>(&mut self, depth: u32, f: F) -> Result<()>
     where
         F: FnOnce(&mut Vec<Value>),
     {
         let pos = self.pos;
-        let top = self.top()?;
+        let depth = self.container_depth(depth)?;
+        let (top, top_depth) = self.top()?;
         if let Value::Set(ref mut set) = *top {
+            *top_depth = depth.max(*top_depth);
             f(set);
             Ok(())
         } else {
@@ -1001,51 +1094,57 @@ impl<R: Read> Deserializer<R> {
         Ok(value)
     }
 
-    // Handle the REDUCE opcode for the few Global objects we support.
-    fn reduce_global(&mut self, global: Value, mut argtuple: Vec<Value>) -> Result<()> {
+    // Handle the REDUCE opcode for the few Global objects we support.  The
+    // arguments are nested at most `depth` levels deep.
+    fn reduce_global(&mut self, global: Value, mut argtuple: Vec<Value>, depth: u32) -> Result<()> {
         match global {
-            Value::Global(Global::Set) => match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
-                Some(Value::List(items)) => {
-                    self.stack.push(Value::Set(items));
-                    Ok(())
+            Value::Global(Global::Set) => {
+                match argtuple.pop().map(|v| self.resolve_nested(v, depth)).transpose()? {
+                    Some((Value::List(items), depth)) => {
+                        self.push_nested(Value::Set(items), depth);
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
                 }
-                _ => self.error(ErrorCode::InvalidValue("set() arg".into())),
-            },
-            Value::Global(Global::Frozenset) => match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
-                Some(Value::List(items)) => {
-                    self.stack.push(Value::FrozenSet(items));
-                    Ok(())
+            }
+            Value::Global(Global::Frozenset) => {
+                match argtuple.pop().map(|v| self.resolve_nested(v, depth)).transpose()? {
+                    Some((Value::List(items), depth)) => {
+                        self.push_nested(Value::FrozenSet(items), depth);
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("frozenset() arg".into())),
                 }
-                _ => self.error(ErrorCode::InvalidValue("frozenset() arg".into())),
-            },
+            }
             Value::Global(Global::Bytearray) => {
                 // On Py2, the call is encoded as bytearray(u"foo", "latin-1").
                 argtuple.truncate(1);
                 match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                     Some(Value::Bytes(bytes)) => {
-                        self.stack.push(Value::Bytes(bytes));
+                        self.push(Value::Bytes(bytes));
                         Ok(())
                     }
                     Some(Value::String(string)) => {
                         // The code points in the string are actually bytes values.
                         // So we need to collect them individually.
-                        self.stack
-                            .push(Value::Bytes(string.chars().map(|ch| ch as u32 as u8).collect()));
+                        self.push(Value::Bytes(string.chars().map(|ch| ch as u32 as u8).collect()));
                         Ok(())
                     }
                     _ => self.error(ErrorCode::InvalidValue("bytearray() arg".into())),
                 }
             }
-            Value::Global(Global::List) => match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
-                Some(Value::List(items)) => {
-                    self.stack.push(Value::List(items));
-                    Ok(())
+            Value::Global(Global::List) => {
+                match argtuple.pop().map(|v| self.resolve_nested(v, depth)).transpose()? {
+                    Some((Value::List(items), depth)) => {
+                        self.push_nested(Value::List(items), depth);
+                        Ok(())
+                    }
+                    _ => self.error(ErrorCode::InvalidValue("list() arg".into())),
                 }
-                _ => self.error(ErrorCode::InvalidValue("list() arg".into())),
-            },
+            }
             Value::Global(Global::Int) => match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
                 Some(Value::Int(integer)) => {
-                    self.stack.push(Value::Int(integer));
+                    self.push(Value::Int(integer));
                     Ok(())
                 }
                 _ => self.error(ErrorCode::InvalidValue("int() arg".into())),
@@ -1063,7 +1162,7 @@ impl<R: Read> Deserializer<R> {
                         // encoded bytes.  It never contains codepoints
                         // above 0xff.
                         let bytes = s.chars().map(|ch| ch as u8).collect();
-                        self.stack.push(Value::Bytes(bytes));
+                        self.push(Value::Bytes(bytes));
                         Ok(())
                     }
                     _ => self.error(ErrorCode::InvalidValue("encode() arg".into())),
@@ -1073,13 +1172,11 @@ impl<R: Read> Deserializer<R> {
                 // Arguments are (class, base, state), we keep state if enabled,
                 // else push an empty dict (for compatibility with NEWOBJ below).
                 if self.options.keep_restore_state {
-                    let state = match argtuple.pop().map(|v| self.resolve(v)).transpose()? {
-                        Some(obj) => obj,
-                        None => Value::Dict(Vec::new()),
-                    };
-                    self.stack.push(state);
+                    let state = argtuple.pop().map(|v| self.resolve_nested(v, depth)).transpose()?;
+                    let (state, depth) = state.unwrap_or((Value::Dict(Vec::new()), 1));
+                    self.push_nested(state, depth);
                 } else {
-                    self.stack.push(Value::Dict(Vec::new()));
+                    self.push_nested(Value::Dict(Vec::new()), 1);
                 }
                 Ok(())
             }
@@ -1088,10 +1185,17 @@ impl<R: Read> Deserializer<R> {
                 // If it is a class object, it will get replaced later when the
                 // class is instantiated.
                 if self.options.keep_restore_state {
-                    let result: Result<_> = argtuple.into_iter().map(|v| self.resolve(v)).collect();
-                    self.stack.push(Value::Tuple(result?));
+                    // Resolved memo references can be nested deeper.
+                    let mut args = Vec::with_capacity(argtuple.len());
+                    let mut deepest = 0;
+                    for arg in argtuple {
+                        let (arg, arg_depth) = self.resolve_nested(arg, depth)?;
+                        deepest = deepest.max(arg_depth);
+                        args.push(arg);
+                    }
+                    self.push_container(Value::Tuple, args, deepest)?;
                 } else {
-                    self.stack.push(Value::Global(Global::Other));
+                    self.push(Value::Global(Global::Other));
                 }
                 Ok(())
             }
@@ -1106,6 +1210,27 @@ impl<R: Read> Deserializer<R> {
 
     fn error<T>(&self, reason: ErrorCode) -> Result<T> {
         Err(Error::Eval(reason, self.pos))
+    }
+
+    // Enter a container while converting, if the depth allows it.
+    fn enter(&mut self) -> Result<()> {
+        if self.depth < self.options.max_depth {
+            self.depth += 1;
+            Ok(())
+        } else {
+            Err(Error::Syntax(ErrorCode::NestingTooDeep))
+        }
+    }
+
+    // Handle the items of a container one level deeper.
+    fn nested<T, F>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self) -> Result<T>,
+    {
+        self.enter()?;
+        let result = f(self);
+        self.depth -= 1;
+        result
     }
 
     fn convert_value(&mut self, value: Value) -> Result<value::Value> {
@@ -1123,37 +1248,37 @@ impl<R: Read> Deserializer<R> {
             Value::F64(v) => Ok(value::Value::F64(v)),
             Value::Bytes(v) => Ok(value::Value::Bytes(v)),
             Value::String(v) => Ok(value::Value::String(v)),
-            Value::List(v) => {
-                let new = v.into_iter().map(|v| self.convert_value(v)).collect::<Result<_>>();
+            Value::List(v) => self.nested(|slf| {
+                let new = v.into_iter().map(|v| slf.convert_value(v)).collect::<Result<_>>();
                 Ok(value::Value::List(new?))
-            }
-            Value::Tuple(v) => {
-                let new = v.into_iter().map(|v| self.convert_value(v)).collect::<Result<_>>();
+            }),
+            Value::Tuple(v) => self.nested(|slf| {
+                let new = v.into_iter().map(|v| slf.convert_value(v)).collect::<Result<_>>();
                 Ok(value::Value::Tuple(new?))
-            }
-            Value::Set(v) => {
+            }),
+            Value::Set(v) => self.nested(|slf| {
                 let new = v
                     .into_iter()
-                    .map(|v| self.convert_value(v).and_then(|rv| rv.into_hashable()))
+                    .map(|v| slf.convert_value(v).and_then(|rv| rv.into_hashable()))
                     .collect::<Result<_>>();
                 Ok(value::Value::Set(new?))
-            }
-            Value::FrozenSet(v) => {
+            }),
+            Value::FrozenSet(v) => self.nested(|slf| {
                 let new = v
                     .into_iter()
-                    .map(|v| self.convert_value(v).and_then(|rv| rv.into_hashable()))
+                    .map(|v| slf.convert_value(v).and_then(|rv| rv.into_hashable()))
                     .collect::<Result<_>>();
                 Ok(value::Value::FrozenSet(new?))
-            }
-            Value::Dict(v) => {
+            }),
+            Value::Dict(v) => self.nested(|slf| {
                 let mut map = BTreeMap::new();
                 for (key, value) in v {
-                    let real_key = self.convert_value(key).and_then(|rv| rv.into_hashable())?;
-                    let real_value = self.convert_value(value)?;
+                    let real_key = slf.convert_value(key).and_then(|rv| rv.into_hashable())?;
+                    let real_value = slf.convert_value(value)?;
                     map.insert(real_key, real_value);
                 }
                 Ok(value::Value::Dict(map))
-            }
+            }),
             Value::MemoRef(memo_id) => {
                 self.resolve_recursive(memo_id, (), |slf, (), value| slf.convert_value(value))
             }
@@ -1189,15 +1314,17 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
             Value::String(v) => visitor.visit_string(v),
             Value::List(v) => {
                 let len = v.len();
-                visitor.visit_seq(SeqAccess { de: self, iter: v.into_iter(), len })
+                self.nested(|de| visitor.visit_seq(SeqAccess { de, iter: v.into_iter(), len }))
             }
-            Value::Tuple(v) => visitor.visit_seq(SeqAccess { len: v.len(), iter: v.into_iter(), de: self }),
+            Value::Tuple(v) => {
+                self.nested(|de| visitor.visit_seq(SeqAccess { len: v.len(), iter: v.into_iter(), de }))
+            }
             Value::Set(v) | Value::FrozenSet(v) => {
-                visitor.visit_seq(SeqAccess { de: self, len: v.len(), iter: v.into_iter() })
+                self.nested(|de| visitor.visit_seq(SeqAccess { de, len: v.len(), iter: v.into_iter() }))
             }
             Value::Dict(v) => {
                 let len = v.len();
-                visitor.visit_map(MapAccess { de: self, iter: v.into_iter(), value: None, len })
+                self.nested(|de| visitor.visit_map(MapAccess { de, iter: v.into_iter(), value: None, len }))
             }
             Value::MemoRef(memo_id) => self.resolve_recursive(memo_id, visitor, |slf, visitor, value| {
                 slf.value = Some(value);
@@ -1236,7 +1363,13 @@ impl<'de: 'a, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     fn deserialize_enum<V: Visitor<'de>>(
         self, _name: &'static str, _variants: &'static [&'static str], visitor: V,
     ) -> Result<V::Value> {
-        visitor.visit_enum(VariantAccess { de: self })
+        // variant_seed (for the enum's tuple or dict) and newtype_variant_seed
+        // (for data from the stream) enter levels without leaving them;
+        // restore the depth here.
+        let depth = self.depth;
+        let result = visitor.visit_enum(VariantAccess { de: &mut *self });
+        self.depth = depth;
+        result
     }
 
     forward_to_deserialize_any! {
@@ -1258,6 +1391,7 @@ impl<'de: 'a, 'a, R: Read + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
         let value = self.de.get_next_value()?;
         match value {
             Value::Tuple(mut v) => {
+                self.de.enter()?; // left in deserialize_enum
                 if v.len() == 2 {
                     let args = v.pop();
                     self.de.value = v.pop();
@@ -1276,6 +1410,7 @@ impl<'de: 'a, 'a, R: Read + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
                         "enum variants must have one dict entry".into(),
                     )))
                 } else {
+                    self.de.enter()?; // left in deserialize_enum
                     let (name, args) = v.pop().unwrap();
                     self.de.value = Some(name);
                     let val = seed.deserialize(&mut *self.de)?;
@@ -1311,6 +1446,11 @@ impl<'de: 'a, 'a, R: Read + 'a> de::VariantAccess<'de> for VariantAccess<'a, R> 
     }
 
     fn newtype_variant_seed<T: de::DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
+        // Data that was not in the enum's tuple or dict is read from the next
+        // pickle in the stream, maybe without any container; count a level.
+        if self.de.value.is_none() {
+            self.de.enter()?; // left in deserialize_enum
+        }
         seed.deserialize(self.de)
     }
 

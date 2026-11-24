@@ -424,3 +424,398 @@ mod value_tests {
         assert_eq!(serde_val, serde_json::Value::Null);
     }
 }
+
+mod depth_tests {
+    use crate::error::{Error, ErrorCode};
+    use crate::{from_slice, value_from_slice, DeOptions, Deserializer, Result, Value};
+    use serde::de::{Deserialize as _, IgnoredAny};
+    use serde_derive::Deserialize;
+    use std::fmt::Debug;
+
+    // The default limit.
+    const LIMIT: usize = 128;
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    enum E {
+        Leaf,
+        Node(Box<E>),
+    }
+
+    // E::Node nested n times around E::Leaf.
+    fn nodes(n: usize) -> E {
+        let mut e = E::Leaf;
+        for _ in 0..n {
+            e = E::Node(Box::new(e));
+        }
+        e
+    }
+
+    // Nesting depth of a decoded value.
+    fn depth(value: &Value) -> usize {
+        match value {
+            Value::List(items) | Value::Tuple(items) => 1 + items.iter().map(depth).max().unwrap_or(0),
+            Value::Dict(map) => 1 + map.values().map(depth).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn assert_parse_error<T: Debug>(result: Result<T>, what: &str) {
+        match result {
+            Err(Error::Eval(ErrorCode::NestingTooDeep, _)) => {}
+            other => panic!("{}: expected NestingTooDeep while parsing, got {:?}", what, other),
+        }
+    }
+
+    fn assert_convert_error<T: Debug>(result: Result<T>, what: &str) {
+        match result {
+            Err(Error::Syntax(ErrorCode::NestingTooDeep)) => {}
+            other => panic!("{}: expected NestingTooDeep while converting, got {:?}", what, other),
+        }
+    }
+
+    // Containers nested n deep: `before` and `after` wrap the innermost
+    // container once per further level.
+    fn nest(n: usize, before: &[u8], inner: &[u8], after: &[u8]) -> Vec<u8> {
+        let mut buf = b"\x80\x04".to_vec();
+        buf.extend(before.repeat(n - 1));
+        buf.extend(inner);
+        buf.extend(after.repeat(n - 1));
+        buf.push(b'.');
+        buf
+    }
+
+    // A name, and the `before`, `inner` and `after` arguments of nest().
+    type Shape = (&'static str, &'static [u8], &'static [u8], &'static [u8]);
+
+    // How each opcode that builds or fills a container nests inline.
+    const INLINE: &[Shape] = &[
+        ("TUPLE1", b"", b")", b"\x85"),
+        ("TUPLE2, 1st item", b"", b")", b"N\x86"),
+        ("TUPLE2, 2nd item", b"N", b")", b"\x86"),
+        ("TUPLE3, 1st item", b"", b")", b"NN\x87"),
+        ("TUPLE3, 2nd item", b"N", b")", b"N\x87"),
+        ("TUPLE3, 3rd item", b"NN", b")", b"\x87"),
+        ("TUPLE", b"(", b")", b"t"),
+        ("LIST", b"(", b"]", b"l"),
+        ("APPEND", b"]", b"]", b"a"),
+        ("APPENDS", b"](", b"]", b"e"),
+        ("DICT", b"(K\x00", b"}", b"d"),
+        ("SETITEM", b"}K\x00", b"}", b"s"),
+        ("SETITEMS", b"}(K\x00", b"}", b"u"),
+        ("FROZENSET", b"(", b")", b"\x91"),
+        ("ADDITEMS", b"\x8f(", b")", b"\x90"),
+        ("INST", b"(", b")", b"i__main__\nC\n"),
+        ("OBJ", b"N(", b")", b"o"),
+        ("NEWOBJ_EX", b"c__main__\nC\n", b")", b"}\x92"),
+        ("NEWOBJ", b"c__main__\nC\n", b")", b"\x85\x81"),
+        ("BUILD", b"N", b")", b"\x85b"),
+        ("DUP", b"", b")", b"2\x85"),
+    ];
+
+    // Nesting with every container memoized, as Python 3 does it.
+    const MEMOIZED: &[Shape] = &[
+        ("lists", b"]\x94", b"]\x94", b"a"),
+        ("tuples", b"", b")", b"\x85\x94"),
+        ("dicts", b"}\x94K\x00", b"}\x94", b"s"),
+        ("frozensets", b"(", b"(\x91\x94", b"\x91\x94"),
+        ("sets", b"\x8f\x94(", b"\x8f\x94", b"\x90"),
+    ];
+
+    // Memoize the stack top under index i, like Python does.
+    fn put(buf: &mut Vec<u8>, i: usize) {
+        if i < 256 {
+            buf.extend(&[b'q', i as u8]);
+        } else {
+            buf.push(b'r');
+            buf.extend(&(i as u32).to_le_bytes());
+        }
+    }
+
+    // [[[]]] with n lists, as Python pickles it.
+    fn memo_lists(n: usize) -> Vec<u8> {
+        let mut buf = b"\x80\x02".to_vec();
+        for i in 0..n {
+            buf.push(b']');
+            put(&mut buf, i);
+        }
+        buf.extend(b"a".repeat(n - 1));
+        buf.push(b'.');
+        buf
+    }
+
+    // {"Node": {"Node": ... "Leaf"}} with n dicts, as Python pickles it.
+    fn memo_enum_dicts(n: usize) -> Vec<u8> {
+        let mut buf = b"\x80\x02}q\x00X\x04\x00\x00\x00Nodeq\x01".to_vec();
+        for i in 1..n {
+            buf.push(b'}');
+            put(&mut buf, i + 1);
+            buf.extend(b"h\x01");
+        }
+        buf.extend(b"X\x04\x00\x00\x00Leaf");
+        put(&mut buf, n + 1);
+        buf.extend(b"s".repeat(n));
+        buf.push(b'.');
+        buf
+    }
+
+    // ("Node", ("Node", ... "Leaf")) with n tuples, as Python pickles it.
+    fn memo_enum_tuples(n: usize) -> Vec<u8> {
+        let mut buf = b"\x80\x02X\x04\x00\x00\x00Nodeq\x00".to_vec();
+        buf.extend(b"h\x00".repeat(n - 1));
+        buf.extend(b"X\x04\x00\x00\x00Leafq\x01");
+        for i in 0..n {
+            buf.push(b'\x86');
+            put(&mut buf, i + 2);
+        }
+        buf.push(b'.');
+        buf
+    }
+
+    // "Node" n times, then "Leaf", each as a pickle of its own: in this form,
+    // the data of a variant is read from the next pickle in the stream.
+    fn enum_stream(n: usize) -> Vec<u8> {
+        let mut buf = b"\x8c\x04Node.".repeat(n);
+        buf.extend(b"\x8c\x04Leaf.");
+        buf
+    }
+
+    // The ways to nest E: a name, and a function taking the number of levels.
+    type Enums = &'static [(&'static str, fn(usize) -> Vec<u8>)];
+    const ENUMS: Enums = &[
+        ("dicts", memo_enum_dicts),
+        ("tuples", memo_enum_tuples),
+        ("stream", enum_stream),
+    ];
+
+    // A set, frozenset or list of n - 1 nested tuples, reduced like
+    // value_to_vec writes sets: REDUCE gets the list of items in a tuple, one
+    // level deeper than the result.
+    fn reduced_set(n: usize, name: &str) -> Vec<u8> {
+        let mut buf = b"\x80\x03cbuiltins\n".to_vec();
+        buf.extend(name.as_bytes());
+        buf.extend(b"\n]()");
+        buf.extend(b"\x85".repeat(n - 2));
+        buf.extend(b"e\x85R.");
+        buf
+    }
+
+    // Instances of an unknown class, each reduced from a 1-tuple holding the
+    // memoized previous one; with keep_restore_state, n tuples nest once
+    // REDUCE resolves the memo references.
+    fn memo_reduces(n: usize) -> Vec<u8> {
+        let mut buf = b"\x80\x02)q\x00".to_vec();
+        for i in 1..n {
+            buf.extend(b"c__main__\nC\nh");
+            buf.push((i - 1) as u8);
+            buf.extend(b"\x85R");
+            put(&mut buf, i);
+        }
+        buf.push(b'.');
+        buf
+    }
+
+    #[test]
+    fn inline_nesting() {
+        let options = DeOptions::new().keep_restore_state();
+        for &(name, before, inner, after) in INLINE {
+            let result = from_slice::<IgnoredAny>(&nest(LIMIT, before, inner, after), options.clone());
+            assert!(result.is_ok(), "{}: {:?}", name, result);
+            // Parsing allows one more level (see reduce_nesting), not two.
+            let result = from_slice::<IgnoredAny>(&nest(LIMIT + 1, before, inner, after), options.clone());
+            assert_convert_error(result, name);
+            let result = from_slice::<IgnoredAny>(&nest(LIMIT + 2, before, inner, after), options.clone());
+            assert_parse_error(result, name);
+        }
+        let value = value_from_slice(&nest(LIMIT, b"", b")", b"\x85"), DeOptions::new()).unwrap();
+        assert_eq!(depth(&value), LIMIT);
+        let pickle = nest(LIMIT + 1, b"", b")", b"\x85");
+        assert_convert_error(value_from_slice(&pickle, DeOptions::new()), "tuples");
+        let pickle = nest(LIMIT + 2, b"", b")", b"\x85");
+        let err = value_from_slice(&pickle, DeOptions::new()).unwrap_err();
+        assert_eq!(err.to_string(), "eval error at offset 132: nesting too deep");
+    }
+
+    #[test]
+    fn memoized_nesting() {
+        let pickle = memo_lists(LIMIT);
+        assert_eq!(depth(&value_from_slice(&pickle, DeOptions::new()).unwrap()), LIMIT);
+        from_slice::<serde_json::Value>(&pickle, DeOptions::new()).unwrap();
+        from_slice::<IgnoredAny>(&pickle, DeOptions::new()).unwrap();
+        let pickle = memo_lists(LIMIT + 1);
+        assert_convert_error(value_from_slice(&pickle, DeOptions::new()), "Value");
+        assert_convert_error(from_slice::<serde_json::Value>(&pickle, DeOptions::new()), "json");
+        assert_convert_error(from_slice::<IgnoredAny>(&pickle, DeOptions::new()), "IgnoredAny");
+
+        for &(name, before, inner, after) in MEMOIZED {
+            let result = from_slice::<IgnoredAny>(&nest(LIMIT, before, inner, after), DeOptions::new());
+            assert!(result.is_ok(), "{}: {:?}", name, result);
+            let pickle = nest(LIMIT + 1, before, inner, after);
+            assert_convert_error(value_from_slice(&pickle, DeOptions::new()), name);
+            assert_convert_error(from_slice::<IgnoredAny>(&pickle, DeOptions::new()), name);
+        }
+    }
+
+    #[test]
+    fn recursive_enum() {
+        for &(name, make) in ENUMS {
+            let result = from_slice::<E>(&make(LIMIT), DeOptions::new());
+            assert_eq!(result.ok(), Some(nodes(LIMIT)), "{}", name);
+            assert_convert_error(from_slice::<E>(&make(LIMIT + 1), DeOptions::new()), name);
+        }
+    }
+
+    #[test]
+    fn restore_state_nesting() {
+        let options = DeOptions::new().keep_restore_state();
+        let value = value_from_slice(&memo_reduces(LIMIT), options.clone()).unwrap();
+        assert_eq!(depth(&value), LIMIT);
+        assert_convert_error(value_from_slice(&memo_reduces(LIMIT + 1), options.clone()), "limit + 1");
+        assert_parse_error(value_from_slice(&memo_reduces(LIMIT + 2), options), "limit + 2");
+    }
+
+    #[test]
+    fn reduce_nesting() {
+        // The tuple of REDUCE arguments may be one level deeper than the limit.
+        for &name in &["set", "frozenset", "list"] {
+            from_slice::<IgnoredAny>(&reduced_set(LIMIT, name), DeOptions::new()).unwrap();
+            value_from_slice(&reduced_set(LIMIT, name), DeOptions::new()).unwrap();
+            assert_parse_error(value_from_slice(&reduced_set(LIMIT + 1, name), DeOptions::new()), name);
+            // The result is as deep as its list, so two more tuples are too deep.
+            let mut pickle = reduced_set(LIMIT, name);
+            pickle.pop();
+            pickle.extend(b"\x85\x85.");
+            assert_parse_error(value_from_slice(&pickle, DeOptions::new()), name);
+        }
+        // A list subclass as Python pickles it with protocol 1 in fast mode;
+        // _reconstructor(cls, list, state) gives the state.
+        let before = b"ccopy_reg\n_reconstructor\n(c__main__\nL\nc__builtin__\nlist\n]";
+        let inner = [&before[..], b"tR"].concat();
+        let options = DeOptions::new().keep_restore_state();
+        let value = value_from_slice(&nest(LIMIT, before, &inner, b"atR"), options.clone()).unwrap();
+        assert_eq!(depth(&value), LIMIT);
+        let result = value_from_slice(&nest(LIMIT + 1, before, &inner, b"atR"), options);
+        assert_parse_error(result, "list subclass");
+    }
+
+    #[test]
+    fn very_deep() {
+        let n = 100_000;
+        let tuples = nest(n, b"", b")", b"\x85");
+        let lists = nest(n, b"]", b"]", b"a");
+        let dicts = nest(n, b"}K\x00", b"}", b"s");
+        for &(name, pickle) in &[("tuples", &tuples), ("lists", &lists), ("dicts", &dicts)] {
+            assert_parse_error(value_from_slice(pickle, DeOptions::new()), name);
+        }
+        // Endings that drop (no STOP), print (APPEND to a tuple) or clone
+        // (DUP) the deep value.
+        for &end in &[&b""[..], b"Na", b"2N."] {
+            let mut pickle = tuples.clone();
+            pickle.pop();
+            pickle.extend(end);
+            assert_parse_error(value_from_slice(&pickle, DeOptions::new()), "tuples");
+        }
+        let pickle = memo_lists(n);
+        assert_convert_error(value_from_slice(&pickle, DeOptions::new()), "Value");
+        assert_convert_error(from_slice::<serde_json::Value>(&pickle, DeOptions::new()), "json");
+        assert_convert_error(from_slice::<IgnoredAny>(&pickle, DeOptions::new()), "IgnoredAny");
+        for &(name, make) in ENUMS {
+            assert_convert_error(from_slice::<E>(&make(n), DeOptions::new()), name);
+        }
+    }
+
+    #[test]
+    fn wide() {
+        // 1000 lists [{"Node": "Leaf"}] in a list: siblings don't add up.
+        let mut pickle = b"\x80\x02]".to_vec();
+        for _ in 0..1000 {
+            pickle.extend(b"]}X\x04\x00\x00\x00NodeX\x04\x00\x00\x00Leafsaa");
+        }
+        pickle.push(b'.');
+        value_from_slice(&pickle, DeOptions::new()).unwrap();
+        from_slice::<serde_json::Value>(&pickle, DeOptions::new()).unwrap();
+        from_slice::<IgnoredAny>(&pickle, DeOptions::new()).unwrap();
+        assert_eq!(from_slice::<Vec<Vec<E>>>(&pickle, DeOptions::new()).unwrap().len(), 1000);
+    }
+
+    #[test]
+    fn error_paths() {
+        // The deepest value the parser keeps is one level over the limit:
+        // drop it (no STOP), print it (APPEND to a tuple) and clone it (DUP).
+        let mut pickle = nest(LIMIT + 1, b"", b")", b"\x85");
+        pickle.pop();
+        match value_from_slice(&pickle, DeOptions::new()) {
+            Err(Error::Eval(ErrorCode::EOFWhileParsing, _)) => {}
+            other => panic!("expected EOF error, got {:?}", other),
+        }
+        let append = [&pickle[..], b"Na."].concat();
+        let expected = format!("{}{}", "Tuple([".repeat(LIMIT + 1), "])".repeat(LIMIT + 1));
+        match value_from_slice(&append, DeOptions::new()) {
+            Err(Error::Eval(ErrorCode::InvalidStackTop("list", got), _)) => assert_eq!(got, expected),
+            other => panic!("expected stack error, got {:?}", other),
+        }
+        let dup = [&pickle[..], b"2N."].concat();
+        assert_eq!(value_from_slice(&dup, DeOptions::new()).unwrap(), Value::None);
+    }
+
+    #[test]
+    fn max_depth_option() {
+        let options = DeOptions::new().max_depth(10);
+        value_from_slice(&nest(10, b"", b")", b"\x85"), options.clone()).unwrap();
+        assert_convert_error(value_from_slice(&nest(11, b"", b")", b"\x85"), options.clone()), "tuples");
+        assert_parse_error(value_from_slice(&nest(12, b"", b")", b"\x85"), options.clone()), "tuples");
+        from_slice::<IgnoredAny>(&memo_lists(10), options.clone()).unwrap();
+        assert_convert_error(from_slice::<IgnoredAny>(&memo_lists(11), options.clone()), "lists");
+        from_slice::<E>(&memo_enum_dicts(10), options.clone()).unwrap();
+        assert_convert_error(from_slice::<E>(&memo_enum_dicts(11), options), "enum");
+
+        let options = DeOptions::new().max_depth(150);
+        value_from_slice(&nest(150, b"]", b"]", b"a"), options.clone()).unwrap();
+        assert_convert_error(value_from_slice(&nest(151, b"]", b"]", b"a"), options.clone()), "lists");
+        value_from_slice(&memo_lists(150), options.clone()).unwrap();
+        assert_convert_error(value_from_slice(&memo_lists(151), options), "memoized lists");
+
+        // Zero only allows scalars, not even empty containers or instances.
+        let options = DeOptions::new().max_depth(0);
+        assert_eq!(value_from_slice(b"N.", options.clone()).unwrap(), Value::None);
+        for &pickle in &[&b")."[..], b"].", b"}.", b"\x8f.", b"(i__main__\nC\n."] {
+            assert_convert_error(value_from_slice(pickle, options.clone()), "empty container");
+        }
+        // Bytes as value_to_vec writes them for protocol 2, with REDUCE.
+        let pickle = b"\x80\x02c_codecs\nencode\nX\x03\x00\x00\x00abcX\x06\x00\x00\x00latin1\x86R.";
+        assert_eq!(value_from_slice(pickle, options).unwrap(), Value::Bytes(b"abc".to_vec()));
+    }
+
+    #[test]
+    fn memo_depth() {
+        // A memoized list gets a deep tuple appended, then DUP copies it out
+        // of the memo, so the copy is that deep too.
+        let tuple = nest(LIMIT, b"", b")", b"\x85");
+        let pickle = [&b"\x80\x04]\x94"[..], &tuple[2..tuple.len() - 1], b"a2\x85."].concat();
+        assert_parse_error(value_from_slice(&pickle, DeOptions::new()), "DUP of memoized list");
+        let pickle = [&b"\x80\x04]\x94"[..], &tuple[2..tuple.len() - 1], b"a2."].concat();
+        assert_convert_error(value_from_slice(&pickle, DeOptions::new()), "memoized list");
+    }
+
+    #[test]
+    fn depth_restored_after_error() {
+        // The next pickle in a stream decodes after a too deep one.
+        let mut stream = memo_lists(LIMIT + 1);
+        stream.extend(memo_lists(LIMIT));
+        let mut de = Deserializer::new(&stream[..], DeOptions::new());
+        assert_convert_error(de.deserialize_value(), "Value");
+        de.reset_memo();
+        assert_eq!(depth(&de.deserialize_value().unwrap()), LIMIT);
+
+        let mut de = Deserializer::new(&stream[..], DeOptions::new());
+        assert_convert_error(IgnoredAny::deserialize(&mut de), "IgnoredAny");
+        de.reset_memo();
+        IgnoredAny::deserialize(&mut de).unwrap();
+
+        let mut stream = memo_enum_dicts(LIMIT + 1);
+        stream.extend(memo_enum_dicts(LIMIT));
+        let mut de = Deserializer::new(&stream[..], DeOptions::new());
+        assert_convert_error(E::deserialize(&mut de), "enum");
+        de.reset_memo();
+        assert_eq!(E::deserialize(&mut de).unwrap(), nodes(LIMIT));
+    }
+}
